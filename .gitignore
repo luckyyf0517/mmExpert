@@ -1,0 +1,10 @@
+**/__pycache__
+
+ckpt
+dataset
+feature
+huggingface
+log
+output
+swanlog
+tmp

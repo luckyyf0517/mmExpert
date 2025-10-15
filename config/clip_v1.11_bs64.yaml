@@ -1,0 +1,44 @@
+log_dir: 'log/'
+strategy: 'ddp'
+
+data_cfg: 
+  target: src.data_interface.HumanDInterface 
+  params: 
+    cfg: 
+      train_split: ['dataset/HumanML3D/_split/train.json']
+      train_ratio: [1.0]
+      val_split: ['dataset/HumanML3D/_split/val.json']
+      val_ratio: [1.0]
+      test_split: ['dataset/HumanML3D/_split/test.json']
+      test_ratio: [1.0]  
+      opt: 
+        udoppler_postfix: 'rotation'
+        max_motion_length: 496
+        min_motion_len: 96
+        max_text_len: 20
+        unit_length: 16
+        log_norm: true
+        random_rotate: false
+        random_scale: false
+        thresholding: false
+      batch_size: 64
+      num_workers: 1
+      sample_ratio: 1
+
+model_cfg: 
+  target: src.model.clip.CLIP
+  params: 
+    max_epochs: 50
+    learning_rate: 1.0e-04
+    encoder_cfg:
+      model_name: 'vit_base_patch16_224'
+      image_resolution: [496, 128]
+      embed_dim: 256
+    text_cfg:
+      model_name: 'sentence-transformers/paraphrase-MiniLM-L6-v2'
+      embed_dim: 384
+    context_length: 24
+    transformer_width: 256
+    transformer_heads: 8
+    transformer_layers: 1
+    temperature: 0.10

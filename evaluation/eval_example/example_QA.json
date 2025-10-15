@@ -1,0 +1,68 @@
+{
+    "QA_Single_EQ__3rscan0568__0": {
+        "question": "Is there a basket in the room?",
+        "pred": [
+            "yes"
+        ],
+        "gt": [
+            "Yes.",
+            "Yes, there is."
+        ]
+    },
+    "QA_Single_EQ__3rscan0568__1": {
+        "question": "Is there a refrigerator in the room?",
+        "pred": [
+            "yes"
+        ],
+        "gt": [
+            "Yes.",
+            "Yes, there is."
+        ]
+    },
+    "QA_Single_EQ__3rscan0568__19": {
+        "question": "Is there a refrigerator in the room?",
+        "pred": [
+            "yes"
+        ],
+        "gt": [
+            "No.",
+            "No, there isn't."
+        ]
+    },
+    "QA_Single_EQ__3rscan0568__20": {
+        "question": "How many toilet papers are there in the room?",
+        "pred": [
+            "1"
+        ],
+        "gt": [
+            "1"
+        ]
+    },
+    "QA_Single_EQ__3rscan0568__26": {
+        "question": "How many baskets are there in the room?",
+        "pred": [
+            "2 baskets"
+        ],
+        "gt": [
+            "2"
+        ]
+    },
+    "QA_Single_EQ__3rscan0568__28": {
+        "question": "How many shelfs are there in the room?",
+        "pred": [
+            "2"
+        ],
+        "gt": [
+            "2"
+        ]
+    },
+    "QA_Single_EQ__3rscan0568__29": {
+        "question": "How many boxs are there in the room?",
+        "pred": [
+            "4"
+        ],
+        "gt": [
+            "7"
+        ]
+    }
+}
