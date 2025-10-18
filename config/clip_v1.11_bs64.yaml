@@ -12,7 +12,7 @@ data_cfg:
       test_split: ['dataset/HumanML3D/_split/test.json']
       test_ratio: [1.0]  
       opt: 
-        udoppler_postfix: 'rotation'
+        udoppler_postfix: '_rotation'
         max_motion_length: 496
         min_motion_len: 96
         max_text_len: 20

@@ -16,7 +16,7 @@ import os.path as osp
 
 import sys; sys.path.append('.')
 from src.wavellm import conversation as conversation_lib
-from src.datasets.base_dataset import process_motion
+from src.datasets.base_dataset import load_radar_data
 
 # Constants
 IGNORE_INDEX = -100
@@ -339,8 +339,7 @@ class WaveCaptionDataset(Dataset):
         sample = preprocess_multimodal_wave([self.format_caption(instance['question'], instance['answer'])])
         data_dict = preprocess(sample, self.tokenizer)
 
-        # Load radar data from NPZ file
-        from src.datasets.base_dataset import load_radar_data
+        # Load radar data from NPZ file using the same pipeline as base_dataset
         radar_data = load_radar_data(instance['filename'], self.opt)
 
         # Convert to tensors
@@ -364,8 +363,7 @@ def mini_dataset(filename, tokenizer, question, answer, caption):
     sample = preprocess_multimodal_wave([WaveCaptionDataset.format_caption(question, answer)])
     data_dict = preprocess(sample, tokenizer)
 
-    # Load radar data from NPZ file
-    from src.datasets.base_dataset import load_radar_data
+    # Load radar data from NPZ file using the same pipeline as base_dataset
     opt = edict(DEFAULT_REAL_CONFIG)
     radar_data = load_radar_data(filename, opt)
 
