@@ -62,7 +62,7 @@ model_cfg:
       unfreeze_last_layer_num: 0
 
     # Transformer configuration for processing fused radar features
-    context_length: 248  # Should match sequence length from radar encoder (31*8=248)
+    context_length: 249  # Should match radar encoder sequence length (31*8=248) + 1 EOT token 
     transformer_width: 256
     transformer_heads: 8
     transformer_layers: 1
