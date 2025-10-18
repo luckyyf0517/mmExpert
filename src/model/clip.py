@@ -132,13 +132,26 @@ class TextEncoder(nn.Module):
                 raise
         self.text_encoder.eval()
         for name, param in self.text_encoder.named_parameters():
-            num_layers = len(self.text_encoder.encoder.layer)
-            unfreeze_param = False
-            for i in range(self.unfreeze_last_layer_num): 
-                if 'layer.%d' % (num_layers - i) in name: 
+            # Handle different model architectures
+            if hasattr(self.text_encoder, 'encoder') and hasattr(self.text_encoder.encoder, 'layer'):
+                # BERT-style models
+                num_layers = len(self.text_encoder.encoder.layer)
+                unfreeze_param = False
+                for i in range(self.unfreeze_last_layer_num):
+                    if 'layer.%d' % (num_layers - i) in name:
+                        unfreeze_param = True
+                    if 'pooler' in name:
+                        unfreeze_param = True
+            elif hasattr(self.text_encoder, 'layers') or hasattr(self.text_encoder, 'model'):
+                # Handle other architectures (like Phi-3)
+                unfreeze_param = False
+                # For simplicity, unfreeze all parameters for these models
+                if self.unfreeze_last_layer_num > 0:
                     unfreeze_param = True
-                if 'pooler' in name: 
-                    unfreeze_param = True
+            else:
+                # Default case
+                unfreeze_param = False
+
             param.requires_grad = unfreeze_param
         
     def encode(self, text, device='cuda'):
@@ -158,48 +171,48 @@ class ImageEncoder(nn.Module):
     def __init__(self,
                  model_name: str,
                  embed_dim: int,
-                 image_resolution: int, 
+                 image_resolution: int,
                  pretrained: bool = True,
                  **kwargs):
         super().__init__()
-        if image_resolution == [496, 128]: 
+        if image_resolution == [496, 128]:
             self.window_size = None
-        else: 
+        else:
             self.window_size = 128
             self.stride = 16
             self.unfold = nn.Sequential(
                 nn.Unfold(kernel_size=(self.window_size, self.window_size), stride=self.stride),
                 Rearrange('b (c h w) n -> (b n) c h w', c=1, h=self.window_size, w=self.window_size))
-        
+
         self.model_name = model_name
-        if 'vit' in model_name: 
+        if 'vit' in model_name:
             self.visual = _create_vision_transformer(model_name, pretrained=pretrained, in_chans=1, img_size=image_resolution, num_classes=embed_dim, **kwargs)
-        elif 'resnet' in model_name: 
+        elif 'resnet' in model_name:
             self.visual = torchvision.models.resnet18(pretrained=pretrained)
             self.visual.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
             self.visual.fc = nn.Linear(self.visual.fc.in_features, embed_dim)
-        
+
     def forward(self, x):
-        if self.window_size is not None: 
+        if self.window_size is not None:
             batch_size = x.size(0)
             x = self.unfold(x)
             x = self.visual(x)
             x = einops.rearrange(x, '(b n) c -> b n c', b=batch_size)
-        else: 
+        else:
             x = self.visual(x)
         return x
-    
+
     def encode_to_sequence(self, x):
-        if self.window_size is not None: 
+        if self.window_size is not None:
             batch_size = x.size(0)
             x = self.unfold(x)
             x = self.visual(x)
             x = einops.rearrange(x, '(b n) c -> b n c', b=batch_size)
-        else: 
-            if 'vit' in self.model_name: 
+        else:
+            if 'vit' in self.model_name:
                 x = self.visual.forward_features(x)
                 x = x[:, 1:, :] # [b, n, c]
-            elif 'resnet' in self.model_name: 
+            elif 'resnet' in self.model_name:
                 x = self.visual.conv1(x)
                 x = self.visual.bn1(x)
                 x = self.visual.relu(x)
@@ -209,12 +222,174 @@ class ImageEncoder(nn.Module):
                 x = self.visual.layer3(x)
                 x = einops.rearrange(x, 'b c h w -> b (h w) c')
         return x
+
+
+class RadarEncoder(nn.Module):
+    """
+    Parallel encoder for three radar views: range_time, doppler_time, azimuth_time
+    Each view has its own encoder and the features are combined.
+    """
+    def __init__(self,
+                 model_name: str,
+                 embed_dim: int,
+                 # Resolutions for each radar view
+                 range_resolution: Tuple[int, int] = (256, 496),  # (range_bins, time_frames)
+                 doppler_resolution: Tuple[int, int] = (128, 496),  # (doppler_bins, time_frames)
+                 azimuth_resolution: Tuple[int, int] = (128, 496),  # (azimuth_bins, time_frames)
+                 pretrained: bool = True,
+                 fusion_method: str = 'concat',  # 'concat', 'add', 'attention'
+                 **kwargs):
+        super().__init__()
+
+        self.model_name = model_name
+        self.embed_dim = embed_dim
+        self.fusion_method = fusion_method
+
+        # Create three separate encoders for each radar view
+        self.range_encoder = self._create_encoder(model_name, embed_dim, range_resolution, pretrained, **kwargs)
+        self.doppler_encoder = self._create_encoder(model_name, embed_dim, doppler_resolution, pretrained, **kwargs)
+        self.azimuth_encoder = self._create_encoder(model_name, embed_dim, azimuth_resolution, pretrained, **kwargs)
+
+        # Fusion layers
+        if fusion_method == 'concat':
+            # Concatenate features and project to embed_dim
+            self.fusion_proj = nn.Linear(embed_dim * 3, embed_dim)
+        elif fusion_method == 'attention':
+            # Attention-based fusion
+            self.attention = nn.MultiheadAttention(embed_dim, num_heads=8, batch_first=True)
+            self.fusion_proj = nn.Linear(embed_dim, embed_dim)
+        elif fusion_method == 'add':
+            # Simple addition (no additional parameters needed)
+            pass
+        else:
+            raise ValueError(f"Unknown fusion method: {fusion_method}")
+
+    def _create_encoder(self, model_name: str, embed_dim: int, resolution: Tuple[int, int], pretrained: bool, **kwargs):
+        """Create an encoder for a specific radar view."""
+        if 'vit' in model_name:
+            # For ViT, treat as 1-channel image with height=range_bins, width=time_frames
+            # Use global_pool=True to get features instead of classification
+            encoder = _create_vision_transformer(
+                model_name,
+                pretrained=pretrained,
+                in_chans=1,
+                img_size=resolution,
+                num_classes=0,  # Set to 0 to get features without classification head
+                **kwargs
+            )
+            # Add a projection layer to get the desired embed_dim
+            encoder.proj = nn.Linear(encoder.embed_dim, embed_dim)
+        elif 'resnet' in model_name:
+            # For ResNet, adapt to 1-channel input
+            encoder = torchvision.models.resnet18(pretrained=pretrained)
+            encoder.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            encoder.fc = nn.Linear(encoder.fc.in_features, embed_dim)
+        else:
+            raise ValueError(f"Unsupported model type: {model_name}")
+
+        return encoder
+
+    def encode_view(self, encoder, x):
+        """Encode a single radar view."""
+        if 'vit' in self.model_name:
+            # For ViT, get features and project to embed_dim
+            features = encoder.forward_features(x)  # [b, n+1, c] where n is sequence length
+            features = features[:, 1:, :]  # Remove CLS token: [b, n, c]
+            features = encoder.proj(features)  # Project to desired embed_dim
+        elif 'resnet' in self.model_name:
+            # For ResNet, get intermediate features
+            x = encoder.conv1(x)
+            x = encoder.bn1(x)
+            x = encoder.relu(x)
+            x = encoder.maxpool(x)
+            x = encoder.layer1(x)
+            x = encoder.layer2(x)
+            x = encoder.layer3(x)
+            # Reshape to sequence format: [b, h*w, c]
+            features = einops.rearrange(x, 'b c h w -> b (h w) c')
+
+        return features
+
+    def forward(self, range_data, doppler_data, azimuth_data):
+        """
+        Forward pass for parallel radar encoders.
+
+        Args:
+            range_data: [b, 256, T] range-time spectrum
+            doppler_data: [b, 128, T] doppler-time spectrum
+            azimuth_data: [b, 128, T] azimuth-time spectrum
+
+        Returns:
+            fused_features: [b, n, embed_dim] fused radar features
+        """
+        # Add channel dimension for 2D conv: [b, 1, H, W]
+        range_data = range_data.unsqueeze(1)    # [b, 1, 256, T]
+        doppler_data = doppler_data.unsqueeze(1)  # [b, 1, 128, T]
+        azimuth_data = azimuth_data.unsqueeze(1)  # [b, 1, 128, T]
+
+        # Encode each view separately
+        range_features = self.encode_view(self.range_encoder, range_data)  # [b, n_range, embed_dim]
+        doppler_features = self.encode_view(self.doppler_encoder, doppler_data)  # [b, n_doppler, embed_dim]
+        azimuth_features = self.encode_view(self.azimuth_encoder, azimuth_data)  # [b, n_azimuth, embed_dim]
+
+        # Fuse features
+        fused_features = self._fuse_features(range_features, doppler_features, azimuth_features)
+
+        return fused_features
+
+    def _fuse_features(self, range_features, doppler_features, azimuth_features):
+        """Fuse features from three radar views."""
+        if self.fusion_method == 'concat':
+            # Concatenate along sequence dimension
+            fused = torch.cat([range_features, doppler_features, azimuth_features], dim=1)  # [b, n_total, embed_dim*3]
+            fused = self.fusion_proj(fused)  # [b, n_total, embed_dim]
+
+        elif self.fusion_method == 'add':
+            # Simple addition (pad to same length first)
+            max_len = max(range_features.size(1), doppler_features.size(1), azimuth_features.size(1))
+
+            # Pad sequences to same length
+            range_padded = F.pad(range_features, (0, 0, 0, max_len - range_features.size(1)))
+            doppler_padded = F.pad(doppler_features, (0, 0, 0, max_len - doppler_features.size(1)))
+            azimuth_padded = F.pad(azimuth_features, (0, 0, 0, max_len - azimuth_features.size(1)))
+
+            fused = (range_padded + doppler_padded + azimuth_padded) / 3.0  # [b, max_len, embed_dim]
+
+        elif self.fusion_method == 'attention':
+            # Stack features for attention: [b, 3, n, embed_dim] where 3 is number of views
+            max_len = max(range_features.size(1), doppler_features.size(1), azimuth_features.size(1))
+
+            # Pad and stack
+            range_padded = F.pad(range_features, (0, 0, 0, max_len - range_features.size(1)))
+            doppler_padded = F.pad(doppler_features, (0, 0, 0, max_len - doppler_features.size(1)))
+            azimuth_padded = F.pad(azimuth_features, (0, 0, 0, max_len - azimuth_features.size(1)))
+
+            stacked = torch.stack([range_padded, doppler_padded, azimuth_padded], dim=1)  # [b, 3, max_len, embed_dim]
+
+            # Reshape for attention: [b, max_len, 3, embed_dim] -> [b*max_len, 3, embed_dim]
+            b, n_views, n_seq, feat_dim = stacked.shape
+            reshaped = stacked.view(b * n_seq, n_views, feat_dim)
+
+            # Apply attention
+            attended, _ = self.attention(reshaped, reshaped, reshaped)  # [b*max_len, 3, embed_dim]
+
+            # Reshape back and average across views
+            attended = attended.view(b, n_seq, n_views, feat_dim)  # [b, max_len, 3, embed_dim]
+            fused = attended.mean(dim=2)  # [b, max_len, embed_dim]
+            fused = self.fusion_proj(fused)  # [b, max_len, embed_dim]
+
+        return fused
+
+    def encode_to_sequence(self, range_data, doppler_data, azimuth_data):
+        """Encode radar data to sequence format (same as forward)."""
+        return self.forward(range_data, doppler_data, azimuth_data)
             
 
 class CLIP(pl.LightningModule):
     """
-    CLIP model from OpenAI's implementation
-    - the transformer is not used for text encoding, but for time series encoding
+    CLIP model for radar data with parallel encoders.
+    - Uses three parallel encoders for range_time, doppler_time, azimuth_time views
+    - The transformer processes the fused radar features
     """
     def __init__(self,
                  encoder_cfg: dict,
@@ -228,13 +403,40 @@ class CLIP(pl.LightningModule):
                  temperature: float,
                  use_siglip: bool = False,
                  learning_rate: float = 1.0e-04,
-                 max_epochs: int = 50):
+                 max_epochs: int = 50,
+                 encoder_type: str = 'radar',  # 'radar' or 'image'
+                 fusion_method: str = 'concat'):  # 'concat', 'add', 'attention'
         super().__init__()
-        self.image_encoder = ImageEncoder(**encoder_cfg)
+        self.encoder_type = encoder_type
+        self.fusion_method = fusion_method
+
+        # Choose encoder type
+        if encoder_type == 'radar':
+            self.radar_encoder = RadarEncoder(fusion_method=fusion_method, **encoder_cfg)
+            encoder_embed_dim = encoder_cfg['embed_dim']
+        else:
+            self.image_encoder = ImageEncoder(**encoder_cfg)
+            encoder_embed_dim = encoder_cfg['embed_dim']
+
         self.text_encoder = TextEncoder(**text_cfg)
-        self.text_projection = nn.Linear(text_cfg.embed_dim, encoder_cfg.embed_dim)
-        
-        if self.image_encoder.window_size is not None: 
+        # Get actual embed_dim from the text encoder
+        text_embed_dim = text_cfg.get('embed_dim', 3072)  # Default fallback
+        self.text_projection = nn.Linear(text_embed_dim, encoder_embed_dim)
+
+        # Transformer setup (for radar encoder)
+        if encoder_type == 'radar':
+            self.context_length = context_length
+            self.transformer = Transformer(
+                width=transformer_width,
+                layers=transformer_layers,
+                heads=transformer_heads,
+                attn_mask=build_attention_mask(context_length)
+            )
+            scale = transformer_width ** -0.5
+            self.eot_token = nn.Parameter(scale * torch.randn(transformer_width))
+            self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width))
+            self.ln_final = LayerNorm(transformer_width)
+        elif encoder_type == 'image' and self.image_encoder.window_size is not None:
             self.context_length = context_length + 1
             self.transformer = Transformer(
                 width=transformer_width,
@@ -246,25 +448,25 @@ class CLIP(pl.LightningModule):
             self.eot_token = nn.Parameter(scale * torch.randn(transformer_width))
             self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width))
             self.ln_final = LayerNorm(transformer_width)
-        
+
         self.use_siglip = use_siglip
-        if use_siglip: 
+        if use_siglip:
             self.logit_scale = nn.Parameter(torch.tensor(1.0))
             self.logit_bias = nn.Parameter(torch.tensor(-10.0))
         else:
             self.logit_scale = 1 / temperature
-        
+
         loss_args = edict({
             'gather_with_grad': True,
             'rank': int(os.environ.get('RANK', 0)),
             'world_size': int(os.environ.get('WORLD_SIZE', 1)),
-            'horovod': False, 
+            'horovod': False,
             'local_loss': False,
             'siglip': use_siglip,
             'loss_dist_impl': 'bidir',
         })
         self.loss_fn = create_loss(loss_args)
-        
+
         self.learning_rate = learning_rate
         self.max_epochs = max_epochs
         self.initialize_parameters()
@@ -281,7 +483,18 @@ class CLIP(pl.LightningModule):
     def initialize_parameters(self):
         if self.text_projection is not None:
             nn.init.normal_(self.text_projection.weight, std=0.01)
-        if self.image_encoder.window_size is not None: 
+
+        if self.encoder_type == 'radar':
+            nn.init.normal_(self.positional_embedding, std=0.01)
+            proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
+            attn_std = self.transformer.width ** -0.5
+            fc_std = (2 * self.transformer.width) ** -0.5
+            for block in self.transformer.resblocks:
+                nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
+                nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
+                nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
+                nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
+        elif hasattr(self.image_encoder, 'window_size') and self.image_encoder.window_size is not None:
             nn.init.normal_(self.positional_embedding, std=0.01)
             proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
             attn_std = self.transformer.width ** -0.5
@@ -294,15 +507,45 @@ class CLIP(pl.LightningModule):
 
     @property
     def dtype(self):
-        return self.image_encoder.visual.conv1.weight.dtype
+        if self.encoder_type == 'radar':
+            # Get dtype from the first parameter of radar encoder
+            return next(self.radar_encoder.parameters()).dtype
+        else:
+            return self.image_encoder.visual.conv1.weight.dtype
 
     def encode_image(self, image):
-        x = self.image_encoder(image) # shape: [b, n, c]
-        if self.image_encoder.window_size is not None: 
-            x = torch.cat([x, self.eot_token.to(x.dtype) + torch.zeros_like(x[:, :1, :])], dim=1)
-            x = x + self.positional_embedding.to(x.dtype)
-            x = self.transformer(x)
-            x = self.ln_final(x[:, -1, :])
+        """Legacy method for backward compatibility."""
+        if self.encoder_type == 'radar':
+            raise ValueError("encode_image is not supported for radar encoder. Use encode_radar instead.")
+        else:
+            x = self.image_encoder(image) # shape: [b, n, c]
+            if hasattr(self.image_encoder, 'window_size') and self.image_encoder.window_size is not None:
+                x = torch.cat([x, self.eot_token.to(x.dtype) + torch.zeros_like(x[:, :1, :])], dim=1)
+                x = x + self.positional_embedding.to(x.dtype)
+                x = self.transformer(x)
+                x = self.ln_final(x[:, -1, :])
+            return x
+
+    def encode_radar(self, range_data, doppler_data, azimuth_data):
+        """
+        Encode radar data using parallel encoders.
+
+        Args:
+            range_data: [b, 256, T] range-time spectrum
+            doppler_data: [b, 128, T] doppler-time spectrum
+            azimuth_data: [b, 128, T] azimuth-time spectrum
+
+        Returns:
+            features: [b, embed_dim] encoded radar features
+        """
+        x = self.radar_encoder(range_data, doppler_data, azimuth_data)  # [b, n, embed_dim]
+
+        # Apply transformer
+        x = torch.cat([x, self.eot_token.to(x.dtype) + torch.zeros_like(x[:, :1, :])], dim=1)
+        x = x + self.positional_embedding.to(x.dtype)
+        x = self.transformer(x)
+        x = self.ln_final(x[:, -1, :])  # Use EOT token representation
+
         return x
 
     def encode_text(self, text, device='cuda'):
@@ -310,31 +553,78 @@ class CLIP(pl.LightningModule):
         x = self.text_projection(x)
         return x
 
-    def forward(self, image, text):
+    def forward(self, radar_data, text):
+        """
+        Forward pass for CLIP with radar data.
+
+        Args:
+            radar_data: Dict with keys 'range_time', 'doppler_time', 'azimuth_time'
+            text: List of text captions
+
+        Returns:
+            radar_features: [b, embed_dim] normalized radar features
+            text_features: [b, embed_dim] normalized text features
+        """
+        if self.encoder_type == 'radar':
+            radar_features = self.encode_radar(
+                radar_data['range_time'],
+                radar_data['doppler_time'],
+                radar_data['azimuth_time']
+            )
+        else:
+            # Legacy image mode
+            image = radar_data  # In legacy mode, radar_data is actually image data
+            radar_features = self.encode_image(image)
+
+        text_features = self.encode_text(text, device=radar_data['range_time'].device if self.encoder_type == 'radar' else radar_data.device)
+
+        # normalized features
+        radar_features = radar_features / radar_features.norm(dim=1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=1, keepdim=True)
+        return radar_features, text_features
+
+    def forward_legacy(self, image, text):
+        """Legacy forward method for backward compatibility."""
         image_features = self.encode_image(image)
         text_features = self.encode_text(text, device=image.device)
         # normalized features
         image_features = image_features / image_features.norm(dim=1, keepdim=True)
-        text_features = text_features / text_features.norm(dim=1, keepdim=True) 
+        text_features = text_features / text_features.norm(dim=1, keepdim=True)
         return image_features, text_features
-    
+
     def compute_loss(self, batch):
-        image_features = batch['image_features']
+        radar_features = batch['radar_features'] if 'radar_features' in batch else batch['image_features']
         text_features = batch['text_features']
-        if not self.use_siglip: 
-            loss_clip = self.loss_fn(image_features, text_features, logit_scale=self.logit_scale)
-        else: 
-            loss_clip = self.loss_fn(image_features, text_features, logit_scale=self.logit_scale, logit_bias=self.logit_bias)
+        if not self.use_siglip:
+            loss_clip = self.loss_fn(radar_features, text_features, logit_scale=self.logit_scale)
+        else:
+            loss_clip = self.loss_fn(radar_features, text_features, logit_scale=self.logit_scale, logit_bias=self.logit_bias)
         return {'loss_clip': loss_clip}
-    
+
     def shared_step(self, batch, batch_idx, phase='train'):
-        self.batch_size = batch['motion'].size(0)
-        batch['motion'] = batch['motion'].unsqueeze(1).float() # [b, c, h, w]
-        motion = batch['motion']
-        text = batch['caption']
-        image_features, text_features = self.forward(motion, text)
-        batch['image_features'] = image_features
-        batch['text_features'] = text_features
+        self.batch_size = batch['input_wave_range'].size(0) if self.encoder_type == 'radar' else batch['motion'].size(0)
+
+        if self.encoder_type == 'radar':
+            # Handle radar data
+            radar_data = {
+                'range_time': batch['input_wave_range'],    # [b, 256, T]
+                'doppler_time': batch['input_wave_doppler'],  # [b, 128, T]
+                'azimuth_time': batch['input_wave_azimuth']   # [b, 128, T]
+            }
+            text = batch['caption']
+            radar_features, text_features = self.forward(radar_data, text)
+            batch['radar_features'] = radar_features
+            batch['image_features'] = radar_features  # For compatibility with loss computation
+            batch['text_features'] = text_features
+        else:
+            # Legacy image mode
+            batch['motion'] = batch['motion'].unsqueeze(1).float() # [b, c, h, w]
+            motion = batch['motion']
+            text = batch['caption']
+            image_features, text_features = self.forward_legacy(motion, text)
+            batch['image_features'] = image_features
+            batch['text_features'] = text_features
+
         return batch
     
     def training_step(self, batch, batch_idx):
@@ -367,11 +657,21 @@ class CLIP(pl.LightningModule):
     
     def configure_optimizers(self):
         lr = self.learning_rate
-        opt = torch.optim.AdamW([
-            {'params': self.text_encoder.parameters(), 'lr': lr / 2},
-            {'params': self.text_projection.parameters(), 'lr': lr},
-            {'params': self.image_encoder.parameters(), 'lr': lr},
-        ], betas=(0.5, 0.9), weight_decay=0.01)
+
+        if self.encoder_type == 'radar':
+            opt = torch.optim.AdamW([
+                {'params': self.text_encoder.parameters(), 'lr': lr / 2},
+                {'params': self.text_projection.parameters(), 'lr': lr},
+                {'params': self.radar_encoder.parameters(), 'lr': lr},
+                {'params': self.transformer.parameters(), 'lr': lr},
+            ], betas=(0.5, 0.9), weight_decay=0.01)
+        else:
+            opt = torch.optim.AdamW([
+                {'params': self.text_encoder.parameters(), 'lr': lr / 2},
+                {'params': self.text_projection.parameters(), 'lr': lr},
+                {'params': self.image_encoder.parameters(), 'lr': lr},
+            ], betas=(0.5, 0.9), weight_decay=0.01)
+
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.max_epochs, eta_min=0)
         return [opt], [scheduler]
     

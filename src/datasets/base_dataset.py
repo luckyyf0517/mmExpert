@@ -19,7 +19,17 @@ DEFAULT_LOG_SCALE = 10
 DEFAULT_ENERGY_THRESHOLD = 60
 DEFAULT_RANDOM_SHIFT_MAX = 0.01
 
-# Default configuration for real dataset
+# Default configuration for radar dataset
+DEFAULT_RADAR_OPT = {
+    'max_motion_length': 496,
+    'min_motion_len': 96,
+    'unit_length': 16,
+    'raw': True,
+    'thresholding': True,
+    'normalize': 'per_frame',  # 'none', 'per_frame', 'global', or 'log'
+}
+
+# Default configuration for real dataset (legacy)
 DEFAULT_REAL_OPT = {
     'max_motion_length': 496,
     'min_motion_len': 96,
@@ -117,30 +127,141 @@ def _add_noise(motion, opt):
         motion = motion + noise
     return motion
 
-def process_motion(motion, opt): 
+def process_motion(motion, opt):
     """Process motion data with various transformations and normalizations."""
     # Apply downsampling
     motion, max_motion_length = _apply_downsample(motion, opt)
-    
+
     # Crop motion to unit length boundaries
     motion, m_length = _crop_motion(motion, opt)
-    
+
     # Apply separation
     motion = _apply_separation(motion, opt)
-    
+
     # Apply logarithmic transformations
     motion = _apply_log_transforms(motion, opt)
-    
+
     # Apply normalization and thresholding
     motion = _apply_normalization(motion, opt)
-    
+
     # Pad motion and create mask
     motion, mask = _pad_motion(motion, m_length, max_motion_length)
-    
+
     # Add noise
     motion = _add_noise(motion, opt)
-    
+
     return motion, mask, m_length
+
+
+# Radar data processing functions (for DATA_FORMAT.md .npz files)
+def _normalize_per_frame(data):
+    """Normalize each time frame to [0, 1] for visualization."""
+    normalized = data.copy()
+    num_bins, T = data.shape
+
+    for t in range(T):
+        frame = normalized[:, t]
+        frame_min = frame.min()
+        frame_max = frame.max()
+        if frame_max > frame_min:
+            normalized[:, t] = (frame - frame_min) / (frame_max - frame_min)
+
+    return normalized
+
+
+def _normalize_global(data):
+    """Global normalization across all frames."""
+    dmin, dmax = data.min(), data.max()
+    if dmax > dmin:
+        return (data - dmin) / (dmax - dmin)
+    return data
+
+
+def _normalize_log(data):
+    """Log-scale normalization."""
+    return np.log10(data + 1e-10)
+
+
+def _apply_radar_normalization(radar_view, opt):
+    """Apply normalization based on strategy for a single radar view."""
+    normalize_type = opt.get('normalize', 'none')
+
+    if normalize_type == 'per_frame':
+        return _normalize_per_frame(radar_view)
+    elif normalize_type == 'global':
+        return _normalize_global(radar_view)
+    elif normalize_type == 'log':
+        return _normalize_log(radar_view)
+    else:  # 'none'
+        return radar_view
+
+
+def _crop_radar_view(radar_view, opt):
+    """Crop radar view to unit length boundaries."""
+    T = radar_view.shape[1]
+    T = (T // opt.unit_length) * opt.unit_length
+    idx = random.randint(0, radar_view.shape[1] - T)
+    radar_view = radar_view[:, idx: idx + T]
+    return radar_view, T
+
+
+def _pad_radar_view(radar_view, T, max_motion_length):
+    """Pad radar view to max_motion_length and create mask."""
+    num_bins, current_T = radar_view.shape
+    mask = np.ones((max_motion_length,), dtype=np.float32)
+
+    if T < max_motion_length:
+        padding = np.zeros((num_bins, max_motion_length - T))
+        radar_view = np.concatenate([radar_view, padding], axis=1)
+        mask[T:] = 0
+    else:
+        radar_view = radar_view[:, :max_motion_length]
+        T = max_motion_length
+
+    return radar_view, mask, T
+
+
+def process_radar_view(radar_view, opt):
+    """Process a single radar view with transformations and normalizations."""
+    # Crop to unit length boundaries
+    radar_view, T = _crop_radar_view(radar_view, opt)
+
+    # Apply normalization
+    radar_view = _apply_radar_normalization(radar_view, opt)
+
+    # Pad and create mask
+    radar_view, mask, T = _pad_radar_view(radar_view, T, opt.max_motion_length)
+
+    return radar_view, mask, T
+
+
+def load_radar_data(npz_file_path, opt):
+    """Load radar data from NPZ file and return three separate views."""
+    try:
+        data = np.load(npz_file_path)
+
+        # Extract raw data (unnormalized as specified in DATA_FORMAT.md)
+        range_time = data['range_time']      # (256, T) - keep original resolution
+        doppler_time = data['doppler_time']  # (128, T)
+        azimuth_time = data['azimuth_time']  # (128, T)
+
+        # Process each view separately
+        range_processed, range_mask, range_T = process_radar_view(range_time, opt)
+        doppler_processed, doppler_mask, doppler_T = process_radar_view(doppler_time, opt)
+        azimuth_processed, azimuth_mask, azimuth_T = process_radar_view(azimuth_time, opt)
+
+        # Return as dictionary with three separate views
+        return {
+            'range_time': range_processed,    # (256, T_processed)
+            'doppler_time': doppler_processed,  # (128, T_processed)
+            'azimuth_time': azimuth_processed,  # (128, T_processed)
+            'mask': range_mask,  # All views should have same T after processing
+            'T': range_T
+        }
+
+    except Exception as e:
+        print(f"Error loading radar data from {npz_file_path}: {e}")
+        return None
 
 
 class Text2DopplerDatasetV2():
@@ -164,7 +285,7 @@ class Text2DopplerDatasetV2():
     def _configure_for_split(self, split_file):
         """Configure options based on split file type."""
         if 'MOMASK' in split_file:
-            self.opt.separate = True
+            self.opt.separate = False
         elif 'REAL' in split_file:
             self.opt.separate = False
             self.opt.random_rotate = False
@@ -173,7 +294,7 @@ class Text2DopplerDatasetV2():
             self.opt.raw = True
         elif 'HumanML3D' in split_file: 
             self.opt.separate = False
-            self.opt.random_rotate = True
+            self.opt.random_rotate = False
             self.opt.random_scale = False
             self.opt.text2doppler = False
             self.opt.raw = False
@@ -188,23 +309,13 @@ class Text2DopplerDatasetV2():
         return list(data_dict.values())[:data_amount]
 
     def _get_motion_path(self, data_dict):
-        """Get motion file path with appropriate postfix."""
+        """Get radar NPZ file path."""
         motion_folder = data_dict['filefolder']
         motion_folder = motion_folder.replace('udoppler', 'udoppler_' + self.udoppler_postfix)
         motion_index = data_dict['fileindex']
-        
-        if self.opt.get('raw'):
-            return os.path.join(motion_folder, f'{motion_index}.npy')
-        else:
-            if self.opt.get('random_rotate'):
-                rotate_postfix = random.choice(self.ROTATE_POSTFIXES)
-                return os.path.join(motion_folder, f'{motion_index}{rotate_postfix}.npy')
-            else: 
-                path = os.path.join(motion_folder, f'{motion_index}A.npy')
-                if os.path.exists(path):
-                    return path
-                else: 
-                    return os.path.join(motion_folder, f'{motion_index}.npy')
+
+        # Return NPZ file path (radar format from DATA_FORMAT.md)
+        return os.path.join(motion_folder, f'{motion_index}.npz')
 
     def _process_caption(self, data_dict):
         """Process caption text with person synonym replacement."""
@@ -216,26 +327,36 @@ class Text2DopplerDatasetV2():
             caption = ''
         return caption.lower()
 
-    def _create_item_dict(self, data_dict, motion_path, motion):
+    def _create_item_dict(self, data_dict, motion_path, motion_data):
         """Create item dictionary with all required fields."""
-        item_dict = {
-            'filename': motion_path,
-            'motion': motion,
-            'caption': self._process_caption(data_dict)
-        }
-        
+        # Handle both radar data (dict) and legacy motion data (array)
+        if isinstance(motion_data, dict):
+            # New radar format with three separate views
+            item_dict = {
+                'filename': motion_path,
+                'radar_data': motion_data,  # Dict with range_time, doppler_time, azimuth_time
+                'caption': self._process_caption(data_dict)
+            }
+        else:
+            # Legacy motion format
+            item_dict = {
+                'filename': motion_path,
+                'motion': motion_data,
+                'caption': self._process_caption(data_dict)
+            }
+
         if 'classid' in data_dict:
             item_dict.update({
                 'classid': data_dict['classid'],
                 'classname': data_dict['classname'],
                 'caption': f"a person {data_dict['classname']}"
             })
-        else: 
+        else:
             item_dict.update({
                 'classid': -1,
                 'classname': 'null'
             })
-        
+
         return item_dict
 
     def __len__(self):
@@ -244,9 +365,19 @@ class Text2DopplerDatasetV2():
     def __getitem__(self, idx):
         data_dict = self.data_list[idx]
         motion_path = self._get_motion_path(data_dict)
-        motion = np.load(motion_path)
-        motion, _, _ = process_motion(motion, self.opt)
-        return self._create_item_dict(data_dict, motion_path, motion)
+
+        # Load radar data from NPZ file
+        radar_data = load_radar_data(motion_path, self.opt)
+        if radar_data is None:
+            # Create dummy data if loading fails
+            radar_data = {
+                'range_time': np.zeros((256, self.opt.max_motion_length), dtype=np.float32),
+                'doppler_time': np.zeros((128, self.opt.max_motion_length), dtype=np.float32),
+                'azimuth_time': np.zeros((128, self.opt.max_motion_length), dtype=np.float32),
+                'mask': np.ones((self.opt.max_motion_length,), dtype=np.float32),
+                'T': self.opt.max_motion_length
+            }
+        return self._create_item_dict(data_dict, motion_path, radar_data)
 
 
 if __name__ == "__main__":

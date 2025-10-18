@@ -26,27 +26,28 @@ DEFAULT_WAVE_START_TOKEN = "<wave_bos>"
 DEFAULT_WAVE_END_TOKEN = "<wave_eos>"
 DEFAULT_WAVE_TOKEN_LEN = 248
 
-# Default configuration for real dataset
+# Default configuration for radar dataset
 DEFAULT_REAL_CONFIG = {
     'max_motion_length': 496,
     'min_motion_len': 96,
     'unit_length': 16,
     'raw': True,
     'thresholding': True,
+    'normalize': 'per_frame',  # 'none', 'per_frame', 'global', or 'log'
 }
 
-# Default question prompts
+# Default question prompts for radar data
 DEFAULT_QUESTION_PROMPTS = [
-    "Describe the human motion based on the provided wave signal representing joint movements.",
-    "Interpret the wave signal and explain the corresponding human motion.",
-    "Analyze the given wave signal to describe the overall movement of the human body.",
-    "Given a wave signal representing motion data, explain how a human is moving.",
-    "Use the provided wave signal to describe the sequence of human body movements.",
-    "Interpret the wave signal to describe the motion pattern of the human body.",
-    "Based on the wave signal data, explain the human motion being represented.",
-    "Analyze the wave signal to generate a description of human motion.",
-    "Use the wave signal to interpret and describe the human body's movement.",
-    "Given the wave signal, describe the motion of the human body in detail."
+    "Describe the human motion based on the provided radar signals including range, Doppler, and azimuth information.",
+    "Interpret the radar data and explain the corresponding human motion patterns.",
+    "Analyze the given radar signals to describe the overall movement of the human body.",
+    "Given radar data representing motion patterns, explain how a human is moving.",
+    "Use the provided radar signals to describe the sequence of human body movements.",
+    "Interpret the radar data to describe the motion pattern of the human body.",
+    "Based on the radar signal data, explain the human motion being represented.",
+    "Analyze the radar signals to generate a description of human motion.",
+    "Use the radar data to interpret and describe the human body's movement.",
+    "Given the radar signals, describe the motion of the human body in detail."
 ]
 
 @dataclass
@@ -76,8 +77,14 @@ class DataCollatorForWaveTextDataset(object):
             batch['input_wave_tokens'] = torch.stack(wave)
         
         if "wave_embed" in instances[0].keys():
-            wave = [instance['wave_embed'] for instance in instances]
-            batch['input_wave_embeds'] = torch.stack(wave)
+            # Stack radar data: range_time, doppler_time, azimuth_time
+            range_data = torch.stack([instance['wave_embed']['range_time'] for instance in instances])
+            doppler_data = torch.stack([instance['wave_embed']['doppler_time'] for instance in instances])
+            azimuth_data = torch.stack([instance['wave_embed']['azimuth_time'] for instance in instances])
+
+            batch['input_wave_range'] = range_data
+            batch['input_wave_doppler'] = doppler_data
+            batch['input_wave_azimuth'] = azimuth_data
             
         return batch
 
@@ -331,14 +338,24 @@ class WaveCaptionDataset(Dataset):
             instance['question'] = self.default_question()
         sample = preprocess_multimodal_wave([self.format_caption(instance['question'], instance['answer'])])
         data_dict = preprocess(sample, self.tokenizer)
-        motion = np.load(instance['filename'])
-        motion, mask, m_length = process_motion(motion, self.opt)
+
+        # Load radar data from NPZ file
+        from src.datasets.base_dataset import load_radar_data
+        radar_data = load_radar_data(instance['filename'], self.opt)
+
+        # Convert to tensors
+        wave_embed = {
+            'range_time': torch.tensor(radar_data['range_time']).float(),
+            'doppler_time': torch.tensor(radar_data['doppler_time']).float(),
+            'azimuth_time': torch.tensor(radar_data['azimuth_time']).float()
+        }
+
         data_dict = dict(input_ids=data_dict["input_ids"][0],
                         labels=data_dict["labels"][0],
                         caption=instance['caption'],
                         question=instance['question'],
                         answer=instance['answer'],
-                        wave_embed=torch.tensor(motion).unsqueeze(0).float())
+                        wave_embed=wave_embed)
         return data_dict
     
 
@@ -346,17 +363,26 @@ def mini_dataset(filename, tokenizer, question, answer, caption):
     """Create a mini dataset sample for testing purposes."""
     sample = preprocess_multimodal_wave([WaveCaptionDataset.format_caption(question, answer)])
     data_dict = preprocess(sample, tokenizer)
-    motion = np.load(filename)
+
+    # Load radar data from NPZ file
+    from src.datasets.base_dataset import load_radar_data
     opt = edict(DEFAULT_REAL_CONFIG)
-    motion, mask, m_length = process_motion(motion, opt)
-    
+    radar_data = load_radar_data(filename, opt)
+
+    # Convert to tensors
+    wave_embed = {
+        'range_time': torch.tensor(radar_data['range_time']).float(),
+        'doppler_time': torch.tensor(radar_data['doppler_time']).float(),
+        'azimuth_time': torch.tensor(radar_data['azimuth_time']).float()
+    }
+
     return dict(
         input_ids=data_dict["input_ids"][0],
         labels=data_dict["labels"][0],
         caption=caption,
         question=question,
         answer=answer,
-        wave_embed=torch.tensor(motion).unsqueeze(0).float()
+        wave_embed=wave_embed
     )
 
 
