@@ -43,7 +43,7 @@ model_cfg:
     # Radar encoder configuration
     encoder_cfg:
       model_name: 'vit_base_patch16_clip_224.openai'  # ViT model
-      embed_dim: 512                               # Feature embedding dimension
+      embed_dim: 256                               # Feature embedding dimension (must match transformer_width)
       fusion_method: 'add'                         # Fusion method: 'concat', 'add', or 'attention'
 
       # Radar signal resolutions
@@ -62,7 +62,7 @@ model_cfg:
       unfreeze_last_layer_num: 0
 
     # Transformer configuration for processing fused radar features
-    context_length: 24
+    context_length: 248  # Should match sequence length from radar encoder (31*8=248)
     transformer_width: 256
     transformer_heads: 8
     transformer_layers: 1

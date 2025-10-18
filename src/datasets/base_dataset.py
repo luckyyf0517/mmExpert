@@ -124,10 +124,10 @@ def load_radar_data(npz_file_path, opt):
 
         # Return as dictionary with three separate views
         return {
-            'range_time': range_processed,    # (256, T_processed)
-            'doppler_time': doppler_processed,  # (128, T_processed)
-            'azimuth_time': azimuth_processed,  # (128, T_processed)
-            'mask': range_mask,  # All views should have same T after processing
+            'range_time': range_processed.astype(np.float32),    # (256, T_processed)
+            'doppler_time': doppler_processed.astype(np.float32),  # (128, T_processed)
+            'azimuth_time': azimuth_processed.astype(np.float32),  # (128, T_processed)
+            'mask': range_mask.astype(np.float32),  # All views should have same T after processing
             'T': range_T
         }
 
