@@ -182,6 +182,10 @@ class Text2DopplerDatasetV2():
         item_dict = {
             'filename': motion_path,
             'radar_data': radar_data,  # Dict with range_time, doppler_time, azimuth_time
+            # Add individual radar views for compatibility with CLIP model
+            'input_wave_range': radar_data['range_time'],
+            'input_wave_doppler': radar_data['doppler_time'],
+            'input_wave_azimuth': radar_data['azimuth_time'],
             'caption': self._process_caption(data_dict)
         }
 

@@ -39,13 +39,12 @@ model_cfg:
     max_epochs: 50
     learning_rate: 1.0e-04
     temperature: 0.07              # CLIP temperature parameter
-    encoder_type: 'radar'          # Specify radar encoder type
-    fusion_method: 'add'         # Fusion method: 'concat', 'add', or 'attention'
 
     # Radar encoder configuration
     encoder_cfg:
       model_name: 'vit_base_patch16_clip_224.openai'  # ViT model
       embed_dim: 512                               # Feature embedding dimension
+      fusion_method: 'add'                         # Fusion method: 'concat', 'add', or 'attention'
 
       # Radar signal resolutions
       range_resolution: [256, 496]    # Range-time spectrum dimensions
@@ -67,4 +66,3 @@ model_cfg:
     transformer_width: 256
     transformer_heads: 8
     transformer_layers: 1
-    temperature: 0.10
