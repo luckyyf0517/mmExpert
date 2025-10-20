@@ -226,7 +226,8 @@ class ImageEncoder(nn.Module):
 
 class RadarEncoder(nn.Module):
     """
-    Parallel encoder for three radar views: range_time, doppler_time, azimuth_time
+    Parallel encoder for radar views: range_time, doppler_time, azimuth_time
+    Supports single view or multiple views based on radar_views configuration.
     Each view has its own encoder and the features are combined.
     """
     def __init__(self,
@@ -239,6 +240,7 @@ class RadarEncoder(nn.Module):
                  pretrained: bool = True,
                  fusion_method: str = 'concat',  # 'concat', 'add', 'attention'
                  adaptive_patch_size: bool = False,  # Enable adaptive patch sizing for uniform sequence length
+                 radar_views: str = 'all',  # 'all', 'doppler_only', 'range_only', 'azimuth_only'
                  **kwargs):
         super().__init__()
 
@@ -246,6 +248,14 @@ class RadarEncoder(nn.Module):
         self.embed_dim = embed_dim
         self.fusion_method = fusion_method
         self.adaptive_patch_size = adaptive_patch_size
+        self.radar_views = radar_views
+
+        # Determine which encoders to create based on radar_views configuration
+        self.use_range = self.radar_views in ['all', 'range_only']
+        self.use_doppler = self.radar_views in ['all', 'doppler_only']
+        self.use_azimuth = self.radar_views in ['all', 'azimuth_only']
+
+        num_views = sum([self.use_range, self.use_doppler, self.use_azimuth])
 
         if adaptive_patch_size:
             # Calculate optimal patch sizes for uniform sequence length
@@ -258,15 +268,18 @@ class RadarEncoder(nn.Module):
             print(f"[INFO] Adaptive patch sizes - Range: {self.range_patch_size}, "
                   f"Doppler: {self.doppler_patch_size}, Azimuth: {self.azimuth_patch_size}")
 
-        # Create three separate encoders for each radar view
-        self.range_encoder = self._create_encoder(model_name, embed_dim, range_resolution, pretrained, 'range', **kwargs)
-        self.doppler_encoder = self._create_encoder(model_name, embed_dim, doppler_resolution, pretrained, 'doppler', **kwargs)
-        self.azimuth_encoder = self._create_encoder(model_name, embed_dim, azimuth_resolution, pretrained, 'azimuth', **kwargs)
+        # Create encoders based on configuration
+        if self.use_range:
+            self.range_encoder = self._create_encoder(model_name, embed_dim, range_resolution, pretrained, 'range', **kwargs)
+        if self.use_doppler:
+            self.doppler_encoder = self._create_encoder(model_name, embed_dim, doppler_resolution, pretrained, 'doppler', **kwargs)
+        if self.use_azimuth:
+            self.azimuth_encoder = self._create_encoder(model_name, embed_dim, azimuth_resolution, pretrained, 'azimuth', **kwargs)
 
         # Fusion layers
         if fusion_method == 'concat':
             # Concatenate features and project to embed_dim
-            self.fusion_proj = nn.Linear(embed_dim * 3, embed_dim)
+            self.fusion_proj = nn.Linear(embed_dim * num_views, embed_dim)
         elif fusion_method == 'attention':
             # Attention-based fusion
             self.attention = nn.MultiheadAttention(embed_dim, num_heads=8, batch_first=True)
@@ -276,6 +289,8 @@ class RadarEncoder(nn.Module):
             pass
         else:
             raise ValueError(f"Unknown fusion method: {fusion_method}")
+
+        print(f"[INFO] RadarEncoder initialized with views: {self.radar_views} (active views: {num_views})")
 
     def _calculate_adaptive_patch_sizes(self, range_res, doppler_res, azimuth_res):
         """
@@ -376,77 +391,95 @@ class RadarEncoder(nn.Module):
 
     def forward(self, range_data, doppler_data, azimuth_data):
         """
-        Forward pass for parallel radar encoders.
+        Forward pass for radar encoders with configurable views and None support.
 
         Args:
-            range_data: [b, 256, T] range-time spectrum
-            doppler_data: [b, 128, T] doppler-time spectrum
-            azimuth_data: [b, 128, T] azimuth-time spectrum
+            range_data: [b, 256, T] range-time spectrum or None
+            doppler_data: [b, 128, T] doppler-time spectrum or None
+            azimuth_data: [b, 128, T] azimuth-time spectrum or None
 
         Returns:
             fused_features: [b, n, embed_dim] fused radar features
         """
-        # Add channel dimension for 2D conv: [b, 1, H, W]
-        range_data = range_data.unsqueeze(1)    # [b, 1, 256, T]
-        doppler_data = doppler_data.unsqueeze(1)  # [b, 1, 128, T]
-        azimuth_data = azimuth_data.unsqueeze(1)  # [b, 1, 128, T]
+        features_list = []
 
-        # Encode each view separately
-        range_features = self.encode_view(self.range_encoder, range_data)  # [b, n_range, embed_dim]
-        doppler_features = self.encode_view(self.doppler_encoder, doppler_data)  # [b, n_doppler, embed_dim]
-        azimuth_features = self.encode_view(self.azimuth_encoder, azimuth_data)  # [b, n_azimuth, embed_dim]
+        # Encode each view based on configuration and data availability
+        if self.use_range and range_data is not None:
+            range_data_2d = range_data.unsqueeze(1)    # [b, 1, 256, T]
+            range_features = self.encode_view(self.range_encoder, range_data_2d)  # [b, n_range, embed_dim]
+            features_list.append(range_features)
+
+        if self.use_doppler and doppler_data is not None:
+            doppler_data_2d = doppler_data.unsqueeze(1)  # [b, 1, 128, T]
+            doppler_features = self.encode_view(self.doppler_encoder, doppler_data_2d)  # [b, n_doppler, embed_dim]
+            features_list.append(doppler_features)
+
+        if self.use_azimuth and azimuth_data is not None:
+            azimuth_data_2d = azimuth_data.unsqueeze(1)  # [b, 1, 128, T]
+            azimuth_features = self.encode_view(self.azimuth_encoder, azimuth_data_2d)  # [b, n_azimuth, embed_dim]
+            features_list.append(azimuth_features)
+
+        # Check if we have any features
+        if len(features_list) == 0:
+            raise ValueError("No valid radar data provided (all inputs are None)")
 
         # Fuse features
-        fused_features = self._fuse_features(range_features, doppler_features, azimuth_features)
+        fused_features = self._fuse_features(features_list)
 
         return fused_features
 
-    def _fuse_features(self, range_features, doppler_features, azimuth_features):
-        """Fuse features from three radar views."""
+    def _fuse_features(self, features_list):
+        """Fuse features from configured radar views."""
+        if len(features_list) == 1:
+            # Single view mode - no fusion needed
+            return features_list[0]
+
         if self.fusion_method == 'concat':
             if self.adaptive_patch_size:
                 # With adaptive patch sizing, features have same sequence length
-                # Stack along feature dimension: [b, n, 3, embed_dim] -> [b, n, embed_dim*3]
-                stacked = torch.stack([range_features, doppler_features, azimuth_features], dim=2)
+                # Stack along feature dimension: [b, n, n_views, embed_dim] -> [b, n, embed_dim*n_views]
+                stacked = torch.stack(features_list, dim=2)
                 b, n, n_views, d = stacked.shape
-                fused = stacked.view(b, n, n_views * d)  # [b, n, embed_dim*3]
+                fused = stacked.view(b, n, n_views * d)  # [b, n, embed_dim*n_views]
                 fused = self.fusion_proj(fused)  # [b, n, embed_dim]
             else:
                 # Original behavior for backward compatibility
-                fused = torch.cat([range_features, doppler_features, azimuth_features], dim=1)  # [b, n_total, embed_dim*3]
+                fused = torch.cat(features_list, dim=1)  # [b, n_total, embed_dim*n_views]
                 fused = self.fusion_proj(fused)  # [b, n_total, embed_dim]
 
         elif self.fusion_method == 'add':
             # Simple addition (pad to same length first)
-            max_len = max(range_features.size(1), doppler_features.size(1), azimuth_features.size(1))
+            max_len = max(feat.size(1) for feat in features_list)
 
             # Pad sequences to same length
-            range_padded = F.pad(range_features, (0, 0, 0, max_len - range_features.size(1)))
-            doppler_padded = F.pad(doppler_features, (0, 0, 0, max_len - doppler_features.size(1)))
-            azimuth_padded = F.pad(azimuth_features, (0, 0, 0, max_len - azimuth_features.size(1)))
+            padded_features = []
+            for feat in features_list:
+                padded = F.pad(feat, (0, 0, 0, max_len - feat.size(1)))
+                padded_features.append(padded)
 
-            fused = (range_padded + doppler_padded + azimuth_padded) / 3.0  # [b, max_len, embed_dim]
+            fused = sum(padded_features) / len(padded_features)  # [b, max_len, embed_dim]
 
         elif self.fusion_method == 'attention':
-            # Stack features for attention: [b, 3, n, embed_dim] where 3 is number of views
-            max_len = max(range_features.size(1), doppler_features.size(1), azimuth_features.size(1))
+            # Stack features for attention: [b, n_views, n, embed_dim]
+            max_len = max(feat.size(1) for feat in features_list)
 
             # Pad and stack
-            range_padded = F.pad(range_features, (0, 0, 0, max_len - range_features.size(1)))
-            doppler_padded = F.pad(doppler_features, (0, 0, 0, max_len - doppler_features.size(1)))
-            azimuth_padded = F.pad(azimuth_features, (0, 0, 0, max_len - azimuth_features.size(1)))
+            padded_features = []
+            for feat in features_list:
+                padded = F.pad(feat, (0, 0, 0, max_len - feat.size(1)))
+                padded_features.append(padded)
 
-            stacked = torch.stack([range_padded, doppler_padded, azimuth_padded], dim=1)  # [b, 3, max_len, embed_dim]
+            stacked = torch.stack(padded_features, dim=1)  # [b, n_views, max_len, embed_dim]
 
-            # Reshape for attention: [b, max_len, 3, embed_dim] -> [b*max_len, 3, embed_dim]
+            # Reshape for attention: [b, max_len, n_views, embed_dim] -> [b*max_len, n_views, embed_dim]
             b, n_views, n_seq, feat_dim = stacked.shape
             reshaped = stacked.view(b * n_seq, n_views, feat_dim)
 
             # Apply attention
-            attended, _ = self.attention(reshaped, reshaped, reshaped)  # [b*max_len, 3, embed_dim]
+            attended, _ = self.attention(reshaped, reshaped, reshaped)  # [b*max_len, n_views, embed_dim]
 
             # Reshape back and average across views
-            attended = attended.view(b, n_seq, n_views, feat_dim)  # [b, max_len, 3, embed_dim]
+            attended = attended.view(b, n_seq, n_views, feat_dim)  # [b, max_len, n_views, embed_dim]
             fused = attended.mean(dim=2)  # [b, max_len, embed_dim]
             fused = self.fusion_proj(fused)  # [b, max_len, embed_dim]
 
@@ -596,7 +629,18 @@ class CLIP(pl.LightningModule):
             radar_data['azimuth_time']
         )
 
-        text_features = self.encode_text(text, device=radar_data['range_time'].device)
+        # Get device from the first non-None radar data
+        device = None
+        if radar_data['range_time'] is not None:
+            device = radar_data['range_time'].device
+        elif radar_data['doppler_time'] is not None:
+            device = radar_data['doppler_time'].device
+        elif radar_data['azimuth_time'] is not None:
+            device = radar_data['azimuth_time'].device
+        else:
+            raise ValueError("All radar data is None, cannot determine device")
+
+        text_features = self.encode_text(text, device=device)
 
         # normalized features
         radar_features = radar_features / radar_features.norm(dim=1, keepdim=True)
@@ -614,13 +658,21 @@ class CLIP(pl.LightningModule):
         return {'loss_clip': loss_clip}
 
     def shared_step(self, batch, batch_idx, phase='train'):
-        self.batch_size = batch['input_wave_range'].size(0)
+        # Determine batch size from non-None radar data
+        if batch['input_wave_range'] is not None:
+            self.batch_size = batch['input_wave_range'].size(0)
+        elif batch['input_wave_doppler'] is not None:
+            self.batch_size = batch['input_wave_doppler'].size(0)
+        elif batch['input_wave_azimuth'] is not None:
+            self.batch_size = batch['input_wave_azimuth'].size(0)
+        else:
+            raise ValueError("All radar views are None")
 
-        # Handle radar data
+        # Handle radar data with None support
         radar_data = {
-            'range_time': batch['input_wave_range'],    # [b, 256, T]
-            'doppler_time': batch['input_wave_doppler'],  # [b, 128, T]
-            'azimuth_time': batch['input_wave_azimuth']   # [b, 128, T]
+            'range_time': batch['input_wave_range'],    # Could be None
+            'doppler_time': batch['input_wave_doppler'],  # Could be None
+            'azimuth_time': batch['input_wave_azimuth']   # Could be None
         }
         text = batch['caption']
         radar_features, text_features = self.forward(radar_data, text)

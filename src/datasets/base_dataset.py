@@ -23,8 +23,6 @@ DEFAULT_RADAR_OPT = {
 }
 
 
-
-
 # Radar data processing functions (for DATA_FORMAT.md .npz files)
 def _normalize_per_frame(data):
     """Normalize each time frame to [0, 1] for visualization."""
@@ -179,15 +177,45 @@ class Text2DopplerDatasetV2():
 
     def _create_item_dict(self, data_dict, motion_path, radar_data):
         """Create item dictionary with all required fields."""
+        radar_views = self.opt.get('radar_views', 'all')
+
+        # Start with basic fields
         item_dict = {
             'filename': motion_path,
             'radar_data': radar_data,  # Dict with range_time, doppler_time, azimuth_time
-            # Add individual radar views for compatibility with CLIP model
-            'input_wave_range': radar_data['range_time'],
-            'input_wave_doppler': radar_data['doppler_time'],
-            'input_wave_azimuth': radar_data['azimuth_time'],
             'caption': self._process_caption(data_dict)
         }
+
+        # Add radar views based on configuration
+        if radar_views == 'all':
+            item_dict.update({
+                'input_wave_range': radar_data['range_time'],
+                'input_wave_doppler': radar_data['doppler_time'],
+                'input_wave_azimuth': radar_data['azimuth_time'],
+            })
+        elif radar_views == 'doppler_only':
+            item_dict.update({
+                'input_wave_range': None,          # Not used in doppler_only mode
+                'input_wave_doppler': radar_data['doppler_time'],
+                'input_wave_azimuth': None,        # Not used in doppler_only mode
+            })
+        elif radar_views == 'range_only':
+            item_dict.update({
+                'input_wave_range': radar_data['range_time'],
+                'input_wave_doppler': None,        # Not used in range_only mode
+                'input_wave_azimuth': None,        # Not used in range_only mode
+            })
+        elif radar_views == 'azimuth_only':
+            item_dict.update({
+                'input_wave_range': None,          # Not used in azimuth_only mode
+                'input_wave_doppler': None,        # Not used in azimuth_only mode
+                'input_wave_azimuth': radar_data['azimuth_time'],
+            })
+        else:
+            raise ValueError(f"Unknown radar_views configuration: {radar_views}")
+
+        # Also store the configuration for model reference
+        item_dict['radar_views_config'] = radar_views
 
         if 'classid' in data_dict:
             item_dict.update({
