@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Data visualization script using project's data interface.
-Loads data using the actual dataset configuration and preprocessing pipeline.
+Loads data using actual dataset configuration and preprocessing pipeline.
 """
 
 import os
@@ -9,8 +9,7 @@ import sys
 import torch
 import numpy as np
 import argparse
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
+import cv2
 from termcolor import colored
 
 # Add project root to path
@@ -19,157 +18,155 @@ sys.path.append('.')
 from src.misc.io import load_config
 from src.misc.tools import instantiate_from_config
 
-# Set matplotlib backend to avoid display issues
-plt.switch_backend('Agg')
-
 
 def ensure_preview_directory():
-    """Ensure the tmp/preview directory exists."""
+    """Ensure tmp/preview directory exists."""
     preview_dir = "/root/autodl-tmp/mmExpert/tmp/preview"
     os.makedirs(preview_dir, exist_ok=True)
     return preview_dir
 
 
-def save_spectrum_image(tensor_data, filename, title, view_name, sample_idx):
-    """
-    Save spectrum tensor as an image with proper visualization.
+def normalize_data_for_display(data, target_range=(0, 255)):
+    """Normalize data for display with proper scaling."""
+    if data.max() > data.min():
+        data_normalized = ((data - data.min()) / (data.max() - data.min()) * 255).astype(np.uint8)
+    else:
+        data_normalized = np.zeros_like(data, dtype=np.uint8)
+    return data_normalized
 
-    Args:
-        tensor_data: PyTorch tensor of shape [batch, height, width] or [height, width]
-        filename: Output filename
-        title: Image title
-        view_name: Name of the radar view
-        sample_idx: Sample index for filename
-    """
+
+def create_beautiful_summary_cv2(wave_data, caption, sample_idx, preview_dir):
+    """Create a beautiful summary plot using OpenCV with professional layout."""
     try:
-        # Convert to numpy and handle batch dimension
-        if len(tensor_data.shape) == 3:
-            # Take first sample from batch
-            data = tensor_data[0].cpu().numpy()
-        else:
-            data = tensor_data.cpu().numpy()
+        # Canvas size - high resolution
+        canvas_width = 1920
+        canvas_height = 1080
+        margin = 50
+        plot_start_y = margin
 
-        # Create figure
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        fig.suptitle(f'{title} - {view_name}', fontsize=14, fontweight='bold')
+        # Create white background
+        canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.uint8) * 255
 
-        # Raw data visualization
-        im1 = ax1.imshow(data, aspect='auto', cmap='viridis', origin='lower')
-        ax1.set_title('Raw Data')
-        ax1.set_xlabel('Time frames')
-        ax1.set_ylabel('Frequency bins')
-        plt.colorbar(im1, ax=ax1, fraction=0.046, pad=0.04)
+        # Title
+        title_text = f"Data Summary - Sample {sample_idx}"
+        cv2.putText(canvas, title_text,
+                   (canvas_width//2 - 200, plot_start_y + 60),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 100, 100), 3)
+        plot_start_y += 100
 
-        # Normalized data visualization
-        data_norm = (data - data.min()) / (data.max() - data.min() + 1e-8)
-        im2 = ax2.imshow(data_norm, aspect='auto', cmap='jet', origin='lower')
-        ax2.set_title('Normalized Data')
-        ax2.set_xlabel('Time frames')
-        ax2.set_ylabel('Frequency bins')
-        plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
-
-        # Add statistics text
-        stats_text = f'Shape: {data.shape}\nMin: {data.min():.3f}\nMax: {data.max():.3f}\nMean: {data.mean():.3f}'
-        fig.text(0.02, 0.98, stats_text, transform=fig.transFigure,
-                 fontsize=10, verticalalignment='top',
-                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-
-        plt.tight_layout()
-        plt.savefig(filename, dpi=150, bbox_inches='tight')
-        plt.close()
-
-        print(colored(f"[SUCCESS] Saved spectrum image: {os.path.basename(filename)}", 'green'))
-        return True
-
-    except Exception as e:
-        print(colored(f"[ERROR] Failed to save spectrum image {filename}: {e}", 'red'))
-        return False
-
-
-def save_all_spectrum_views(wave_data, sample_idx, preview_dir):
-    """Save all three spectrum views (range, doppler, azimuth) as images."""
-    base_name = f"sample_{sample_idx:03d}"
-
-    # Define view configurations
-    view_configs = [
-        ('input_wave_range', 'Range-Time Spectrum', 'range'),
-        ('input_wave_doppler', 'Doppler-Time Spectrum', 'doppler'),
-        ('input_wave_azimuth', 'Azimuth-Time Spectrum', 'azimuth')
-    ]
-
-    success_count = 0
-
-    for key, title, view_name in view_configs:
-        if key in wave_data:
-            filename = os.path.join(preview_dir, f"{base_name}_{view_name}_spectrum.png")
-            if save_spectrum_image(wave_data[key], filename, title, view_name, sample_idx):
-                success_count += 1
-
-    print(colored(f"[INFO] Saved {success_count}/3 spectrum images for sample {sample_idx}", 'blue'))
-    return success_count == 3
-
-
-def create_data_summary_plot(wave_data, caption, sample_idx, preview_dir):
-    """Create a summary plot showing all views and caption."""
-    try:
-        fig, axes = plt.subplots(3, 2, figsize=(16, 12))
-        fig.suptitle(f'Data Summary - Sample {sample_idx}', fontsize=16, fontweight='bold')
-
+        # Define view configurations
         views = [
-            ('input_wave_range', 'Range-Time', 'viridis'),
-            ('input_wave_doppler', 'Doppler-Time', 'plasma'),
-            ('input_wave_azimuth', 'Azimuth-Time', 'inferno')
+            ('input_wave_range', 'Range-Time'),
+            ('input_wave_doppler', 'Doppler-Time'),
+            ('input_wave_azimuth', 'Azimuth-Time')
         ]
 
-        for idx, (key, title, colormap) in enumerate(views):
-            if key in wave_data and idx < 3:
-                # Get data and handle batch dimension
-                data = wave_data[key][0].cpu().numpy() if len(wave_data[key].shape) == 3 else wave_data[key].cpu().numpy()
+        # Plot each view
+        plot_height = 300
+        plot_width = (canvas_width - 3 * margin) // 4
+        individual_width = plot_width - 250  # Reserve space for stats
 
-                # Spectrum plot
-                ax_spectrum = axes[idx, 0]
-                im = ax_spectrum.imshow(data, aspect='auto', cmap=colormap, origin='lower')
-                ax_spectrum.set_title(f'{title} Spectrum', fontweight='bold')
-                ax_spectrum.set_xlabel('Time frames')
-                ax_spectrum.set_ylabel('Frequency bins')
-                plt.colorbar(im, ax=ax_spectrum, fraction=0.046, pad=0.04)
+        for i, (key, title) in enumerate(views):
+            if key not in wave_data:
+                continue
 
-                # Statistics panel
-                ax_stats = axes[idx, 1]
-                stats_text = f'Shape: {data.shape}\n\n'
-                stats_text += f'Min: {data.min():.3f}\n'
-                stats_text += f'Max: {data.max():.3f}\n'
-                stats_text += f'Mean: {data.mean():.3f}\n'
-                stats_text += f'Std: {data.std():.3f}\n\n'
-                stats_text += f'Non-zero: {np.count_nonzero(data)}'
+            # Get data and handle batch dimension
+            if len(wave_data[key].shape) == 3:
+                data = wave_data[key][0].cpu().numpy()
+            else:
+                data = wave_data[key].cpu().numpy()
 
-                ax_stats.axis('off')
-                ax_stats.text(0.1, 0.9, stats_text, transform=ax_stats.transAxes,
-                             fontsize=9, verticalalignment='top',
-                             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+            # Calculate position
+            x_start = margin + i * (plot_width // 3)
+            y_start = plot_start_y
 
-        # Hide unused axes
-        for idx in range(len(views), 3):
-            axes[idx, 0].axis('off')
-            axes[idx, 1].axis('off')
+            # Create subplot area with subtle border
+            cv2.rectangle(canvas, (x_start-2, y_start-2),
+                          (x_start + plot_width + 2, y_start + plot_height),
+                          (200, 200, 200), -1)
 
-        # Add caption at the bottom
-        fig.text(0.5, 0.02, f'Caption: "{caption}"',
-                  ha='center', va='bottom', fontsize=11,
-                  bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+            # Normalized spectrum image (left side)
+            data_norm = normalize_data_for_display(data)
+            data_resized = cv2.resize(data_norm, (individual_width, plot_height))
+            data_colored = cv2.applyColorMap(data_resized, cv2.COLORMAP_VIRIDIS)
 
-        plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+            # Place in canvas
+            canvas[y_start:y_start+plot_height, x_start:x_start+individual_width] = data_colored
 
-        # Save summary
+            # Title and stats box (right side)
+            title_x = x_start + individual_width + 20
+            cv2.putText(canvas, f"{title} Spectrum",
+                       (title_x, y_start + 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+            # Statistics
+            stats = [
+                f"Shape: {data.shape}",
+                f"Min: {data.min():.3f}",
+                f"Max: {data.max():.3f}",
+                f"Mean: {data.mean():.3f}",
+                f"Std: {data.std():.3f}",
+                f"Non-zero: {np.count_nonzero(data)}"
+            ]
+
+            for j, stat in enumerate(stats):
+                cv2.putText(canvas, stat,
+                           (title_x, y_start + 60 + j * 25),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+
+            plot_start_y += plot_height + 50
+
+        # Caption area with background
+        plot_start_y += 50
+        caption_height = 120
+
+        # Caption background
+        cv2.rectangle(canvas, (margin, plot_start_y-10),
+                      (canvas_width - margin, plot_start_y + caption_height),
+                      (240, 240, 220), -1)
+
+        # Add caption text with word wrap
+        caption_display = str(caption) if isinstance(caption, str) else str(caption[0]) if caption else ""
+
+        # Word wrap long captions
+        max_chars_per_line = 80
+        if len(caption_display) > max_chars_per_line:
+            words = caption_display.split()
+            lines = []
+            current_line = ""
+            for word in words:
+                if len(current_line + word + " ") <= max_chars_per_line:
+                    current_line += word + " "
+                else:
+                    lines.append(current_line.strip())
+                    current_line = word + " "
+            if current_line.strip():
+                lines.append(current_line.strip())
+        else:
+            lines = [caption_display]
+
+        # Draw caption text
+        for i, line in enumerate(lines[:4]):  # Max 4 lines
+            cv2.putText(canvas, line,
+                       (margin + 20, plot_start_y + 30 + i * 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20, 20, 20), 2)
+
+        plot_start_y += caption_height + 30
+
+        # Footer with sample info
+        footer_text = f"Sample {sample_idx:03d} - mmExpert Data Visualization"
+        cv2.putText(canvas, footer_text,
+                   (margin, canvas_height - 40),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (150, 150, 150), 2)
+
+        # Save beautiful summary
         summary_filename = os.path.join(preview_dir, f"sample_{sample_idx:03d}_summary.png")
-        plt.savefig(summary_filename, dpi=150, bbox_inches='tight')
-        plt.close()
+        cv2.imwrite(summary_filename, canvas)
 
-        print(colored(f"[SUCCESS] Saved summary: {os.path.basename(summary_filename)}", 'green'))
+        print(colored(f"[SUCCESS] Saved beautiful summary: {os.path.basename(summary_filename)}", 'green'))
         return True
 
     except Exception as e:
-        print(colored(f"[ERROR] Failed to create summary plot: {e}", 'red'))
+        print(colored(f"[ERROR] Failed to create beautiful summary: {e}", 'red'))
         return False
 
 
@@ -182,7 +179,7 @@ def parse_args():
                        help='Number of samples to display (default: 3)')
     parser.add_argument('--model-config', type=str, default=None,
                        help='Path to model configuration file (for complete setup test)')
-    parser.add_argument('--save-images', action='store_true', default=True,
+    parser.add_argument('--save-images', action='store_true', default=False,
                        help='Save spectrum images and summary plots')
     parser.add_argument('--output-dir', type=str, default=None,
                        help='Output directory for saved images (default: tmp/preview)')
@@ -214,7 +211,7 @@ def display_tensor_info(wave_embed, sample_num):
 
 
 def load_data_sample_from_dataset(data_interface, num_samples=3, save_images=False, preview_dir=None):
-    """Load data samples using the project's data interface."""
+    """Load data samples using project's data interface."""
     print(f"\n{'='*60}")
     print("Loading Data Using Project Data Interface")
     print(f"{'='*60}")
@@ -246,7 +243,7 @@ def load_data_sample_from_dataset(data_interface, num_samples=3, save_images=Fal
             if i >= num_samples:
                 break
 
-            print(f"\n--- Sample {i} ---")
+            print(f"\n--- Sample {i+1} ---")
 
             # Extract batch data (assuming dict structure)
             if isinstance(batch, dict):
@@ -275,8 +272,7 @@ def load_data_sample_from_dataset(data_interface, num_samples=3, save_images=Fal
 
             # Save images if requested
             if save_images and preview_dir:
-                print(colored(f"\n[IMAGES] Saving images for sample {i+1}...", 'yellow'))
-                save_all_spectrum_views(wave_embed, i+1, preview_dir)
+                print(colored(f"\n[IMAGES] Saving beautiful summary for sample {i+1}...", 'yellow'))
 
                 # Handle caption for summary
                 sample_caption = caption
@@ -285,7 +281,7 @@ def load_data_sample_from_dataset(data_interface, num_samples=3, save_images=Fal
                 elif not isinstance(caption, str):
                     sample_caption = str(caption)
 
-                create_data_summary_plot(wave_embed, sample_caption, i+1, preview_dir)
+                create_beautiful_summary_cv2(wave_embed, sample_caption, i+1, preview_dir)
 
             # Display text information
             if text_data is not None:
@@ -456,6 +452,7 @@ def main():
             print(colored("  [SUCCESS] Handling text captions and tokenization", 'green'))
             print(colored("  [SUCCESS] Batch processing with proper shapes", 'green'))
             print(colored("  [SUCCESS] Displaying tensor statistics and metadata", 'green'))
+            print(colored("  [SUCCESS] Creating beautiful CV2 summaries", 'green'))
 
             print(colored("\n[INFO] The dataset preprocessing pipeline is working correctly!", 'blue', attrs=['bold']))
             print(colored(f"[INFO] Use this tool to verify data before training experiments", 'yellow'))
@@ -473,7 +470,7 @@ def main():
                         print(colored(f"\n[FILES] Images saved to directory:", 'cyan', attrs=['bold']))
                         print(colored(f"        {preview_dir}", 'cyan'))
                         print(colored(f"[FILES] Total saved files: {len(saved_files)}", 'green'))
-                        print(colored("[FILES] Saved image files:", 'blue'))
+                        print(colored("[FILES] Saved beautiful summary files:", 'blue'))
                         for i, file_path in enumerate(sorted(saved_files), 1):
                             file_size = os.path.getsize(file_path)
                             file_size_mb = file_size / (1024 * 1024)  # Convert to MB
