@@ -6,5 +6,6 @@ feature
 huggingface
 log
 output
+results
 swanlog
 tmp

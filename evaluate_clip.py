@@ -18,20 +18,24 @@ from tqdm import tqdm
 from sklearn.metrics import top_k_accuracy_score
 import argparse
 from pathlib import Path
+import yaml
 
 # Add project root to path
 sys.path.append('/root/autodl-tmp/mmExpert')
 
 from src.model.clip import CLIP
 from src.data_interface import HumanDInterface
+from src.misc.io import load_yaml
 from easydict import EasyDict as edict
 import pytorch_lightning as pl
 
 class CLIPEvaluator:
-    def __init__(self, model_path, config_path, device='cuda'):
+    def __init__(self, model_path, config_path, device='cuda', debug=False, batch_size=None):
         self.device = device
         self.model_path = model_path
         self.config_path = config_path
+        self.debug = debug
+        self.override_batch_size = batch_size
 
         # Load model
         self.model = self.load_model()
@@ -45,9 +49,8 @@ class CLIPEvaluator:
         """Load trained CLIP model"""
         print(f"Loading model from {self.model_path}")
 
-        # Load config
-        with open(self.config_path, 'r') as f:
-            config = json.load(f)
+        # Load config using YAML loader
+        config = load_yaml(self.config_path)
 
         model_cfg = config['model_cfg']['params']
         model = CLIP(**model_cfg)
@@ -68,29 +71,36 @@ class CLIPEvaluator:
         """Load test dataset"""
         print("Loading test dataset...")
 
-        # Load config
-        with open(self.config_path, 'r') as f:
-            config = json.load(f)
+        # Load config using YAML loader
+        config = load_yaml(self.config_path)
 
         data_cfg = config['data_cfg']
-        data_interface = HumanDInterface(data_cfg['params'])
+
+        # Override batch size if specified
+        if self.override_batch_size is not None:
+            original_batch_size = data_cfg['params']['cfg']['batch_size']
+            data_cfg['params']['cfg']['batch_size'] = self.override_batch_size
+            print(f"Overriding batch size: {original_batch_size} → {self.override_batch_size}")
+
+        data_interface = HumanDInterface(data_cfg['params']['cfg'])
         data_interface.setup('test')
 
         test_dataloader = data_interface.test_dataloader()
         print(f"Test dataset loaded: {len(test_dataloader.dataset)} samples")
+        print(f"Using batch size: {test_dataloader.batch_size}")
 
         return test_dataloader
 
     def extract_features(self):
-        """Extract features from test dataset"""
-        print("Extracting features...")
+        """Extract features from test dataset (batch-wise evaluation)"""
+        print("Extracting features and evaluating batch-wise...")
 
-        all_radar_features = []
-        all_text_features = []
+        batch_size = self.test_dataloader.batch_size
+        all_batch_results = []
         all_captions = []
 
         with torch.no_grad():
-            for batch in tqdm(self.test_dataloader, desc="Extracting features"):
+            for batch_idx, batch in enumerate(tqdm(self.test_dataloader, desc="Batch evaluation")):
                 # Move batch to device
                 for key in batch:
                     if isinstance(batch[key], torch.Tensor):
@@ -111,103 +121,149 @@ class CLIPEvaluator:
                 radar_features = radar_features / radar_features.norm(dim=1, keepdim=True)
                 text_features = text_features / text_features.norm(dim=1, keepdim=True)
 
-                all_radar_features.append(radar_features.cpu())
-                all_text_features.append(text_features.cpu())
-                all_captions.extend(batch['caption'])
+                # Get captions for this batch
+                batch_captions = batch['caption']
 
-        # Concatenate all features
-        all_radar_features = torch.cat(all_radar_features, dim=0)
-        all_text_features = torch.cat(all_text_features, dim=0)
+                # Evaluate batch-wise retrieval with debug info
+                batch_results = self.evaluate_batch_retrieval(
+                    radar_features, text_features, batch_idx, batch_captions
+                )
+                all_batch_results.append(batch_results)
+                all_captions.extend(batch_captions)
 
-        print(f"Features extracted:")
-        print(f"  Radar features: {all_radar_features.shape}")
-        print(f"  Text features: {all_text_features.shape}")
+        # Aggregate results across all batches
+        aggregated_results = self.aggregate_batch_results(all_batch_results)
 
-        return all_radar_features, all_text_features, all_captions
+        print(f"Batch-wise evaluation completed:")
+        print(f"  Total batches: {len(all_batch_results)}")
+        print(f"  Batch size: {batch_size}")
+        print(f"  Total samples evaluated: {len(all_captions)}")
 
-    def evaluate_retrieval(self, radar_features, text_features, k_values=[1, 5, 10]):
-        """Evaluate retrieval performance"""
-        print("\nEvaluating retrieval performance...")
+        return aggregated_results, all_captions
 
-        # Move to device for computation
-        radar_features = radar_features.to(self.device)
-        text_features = text_features.to(self.device)
+    def evaluate_batch_retrieval(self, radar_features, text_features, batch_idx, captions=None):
+        """Evaluate retrieval within a batch (in-batch negative sampling)"""
+        batch_size = len(radar_features)
 
-        # Compute similarity matrix
+        # Compute similarity matrix within batch
         similarity_matrix = torch.matmul(radar_features, text_features.T)
 
+        batch_results = {
+            'batch_size': batch_size,
+            'batch_idx': batch_idx,
+            'r2t_correct': [],
+            't2r_correct': [],
+            'r2t_ranks': [],
+            't2r_ranks': [],
+            'similarities_diag': [],
+            'similarities_off_diag': []
+        }
+
+        # Debug output for this batch
+        if self.debug and captions is not None:
+            print(f"\n" + "="*80)
+            print(f"🔍 DEBUG - Batch {batch_idx} (Size: {batch_size})")
+            print(f"="*80)
+
+        # Evaluate Radar→Text retrieval
+        for i in range(batch_size):
+            # Get sorted indices for this radar sample
+            _, sorted_indices = torch.sort(similarity_matrix[i], descending=True)
+            rank = (sorted_indices == i).nonzero(as_tuple=True)[0].item() + 1
+            batch_results['r2t_ranks'].append(rank)
+            batch_results['r2t_correct'].append(rank == 1)  # Recall@1
+            batch_results['similarities_diag'].append(similarity_matrix[i, i].item())
+
+            # Debug output for this sample
+            if self.debug and captions is not None:
+                correct_caption = captions[i]
+                predicted_idx = sorted_indices[0].item()
+                predicted_caption = captions[predicted_idx]
+                similarity_score = similarity_matrix[i, predicted_idx].item()
+
+                print(f"\n📊 Sample {i:2d}:")
+                print(f"   ✅ Correct Caption: {correct_caption}")
+                print(f"   🎯 Predicted Caption: {predicted_caption}")
+                print(f"   📈 Similarity Score: {similarity_score:.4f}")
+                print(f"   🏆 Rank of Correct: {rank}")
+
+                # Show top 3 predictions
+                print(f"   🔝 Top 3 Predictions:")
+                for j in range(min(3, batch_size)):
+                    pred_idx = sorted_indices[j].item()
+                    pred_caption = captions[pred_idx]
+                    pred_score = similarity_matrix[i, pred_idx].item()
+                    is_correct = "✅" if pred_idx == i else "❌"
+                    print(f"      {j+1}. {is_correct} [{pred_score:.4f}] {pred_caption}")
+
+        # Evaluate Text→Radar retrieval
+        for i in range(batch_size):
+            # Get sorted indices for this text sample
+            _, sorted_indices = torch.sort(similarity_matrix[:, i], descending=True)
+            rank = (sorted_indices == i).nonzero(as_tuple=True)[0].item() + 1
+            batch_results['t2r_ranks'].append(rank)
+            batch_results['t2r_correct'].append(rank == 1)  # Recall@1
+            # Sample some off-diagonal similarities for analysis
+            for j in range(batch_size):
+                if i != j:
+                    batch_results['similarities_off_diag'].append(similarity_matrix[j, i].item())
+                    break  # Just take one off-diagonal per sample
+
+        return batch_results
+
+    def aggregate_batch_results(self, all_batch_results):
+        """Aggregate results across all batches"""
+        total_samples = sum(result['batch_size'] for result in all_batch_results)
+
+        # Collect all metrics
+        all_r2t_correct = []
+        all_t2r_correct = []
+        all_r2t_ranks = []
+        all_t2r_ranks = []
+        all_diag_similarities = []
+        all_off_diag_similarities = []
+
+        for batch_result in all_batch_results:
+            all_r2t_correct.extend(batch_result['r2t_correct'])
+            all_t2r_correct.extend(batch_result['t2r_correct'])
+            all_r2t_ranks.extend(batch_result['r2t_ranks'])
+            all_t2r_ranks.extend(batch_result['t2r_ranks'])
+            all_diag_similarities.extend(batch_result['similarities_diag'])
+            all_off_diag_similarities.extend(batch_result['similarities_off_diag'])
+
+        # Calculate aggregated metrics
         results = {}
-        n_samples = len(radar_features)
 
-        # Radar→Text retrieval
-        print("\n1. Radar → Text Retrieval:")
-        for k in k_values:
-            # Get top-k predictions for each radar sample
-            _, top_k_indices = torch.topk(similarity_matrix, k=k, dim=1)
+        # Recall@K metrics
+        results['radar_to_text_recall@1'] = np.mean(all_r2t_correct)
+        results['text_to_radar_recall@1'] = np.mean(all_t2r_correct)
 
-            # Calculate recall@k (assuming 1-to-1 pairing)
-            correct_predictions = 0
-            for i in range(n_samples):
-                if i in top_k_indices[i]:  # Check if correct text is in top-k
-                    correct_predictions += 1
+        # Recall@5 and @10
+        results['radar_to_text_recall@5'] = np.mean([rank <= 5 for rank in all_r2t_ranks])
+        results['text_to_radar_recall@5'] = np.mean([rank <= 5 for rank in all_t2r_ranks])
+        results['radar_to_text_recall@10'] = np.mean([rank <= 10 for rank in all_r2t_ranks])
+        results['text_to_radar_recall@10'] = np.mean([rank <= 10 for rank in all_t2r_ranks])
 
-            recall_k = correct_predictions / n_samples
-            results[f'radar_to_text_recall@{k}'] = recall_k
-            print(f"  Recall@{k}: {recall_k:.4f}")
-
-        # Text→Radar retrieval
-        print("\n2. Text → Radar Retrieval:")
-        for k in k_values:
-            # Get top-k predictions for each text sample
-            _, top_k_indices = torch.topk(similarity_matrix.T, k=k, dim=1)
-
-            # Calculate recall@k
-            correct_predictions = 0
-            for i in range(n_samples):
-                if i in top_k_indices[i]:  # Check if correct radar is in top-k
-                    correct_predictions += 1
-
-            recall_k = correct_predictions / n_samples
-            results[f'text_to_radar_recall@{k}'] = recall_k
-            print(f"  Recall@{k}: {recall_k:.4f}")
-
-        # Calculate Mean Reciprocal Rank (MRR)
-        print("\n3. Mean Reciprocal Rank (MRR):")
-
-        # Radar→Text MRR
-        _, sorted_indices = torch.sort(similarity_matrix, dim=1, descending=True)
-        radar_to_text_ranks = []
-        for i in range(n_samples):
-            rank = (sorted_indices[i] == i).nonzero(as_tuple=True)[0].item() + 1
-            radar_to_text_ranks.append(1.0 / rank)
-
-        radar_to_text_mrr = np.mean(radar_to_text_ranks)
-        results['radar_to_text_mrr'] = radar_to_text_mrr
-        print(f"  Radar→Text MRR: {radar_to_text_mrr:.4f}")
-
-        # Text→Radar MRR
-        _, sorted_indices = torch.sort(similarity_matrix.T, dim=1, descending=True)
-        text_to_radar_ranks = []
-        for i in range(n_samples):
-            rank = (sorted_indices[i] == i).nonzero(as_tuple=True)[0].item() + 1
-            text_to_radar_ranks.append(1.0 / rank)
-
-        text_to_radar_mrr = np.mean(text_to_radar_ranks)
-        results['text_to_radar_mrr'] = text_to_radar_mrr
-        print(f"  Text→Radar MRR: {text_to_radar_mrr:.4f}")
+        # MRR
+        results['radar_to_text_mrr'] = np.mean([1.0/rank for rank in all_r2t_ranks])
+        results['text_to_radar_mrr'] = np.mean([1.0/rank for rank in all_t2r_ranks])
 
         # Median Rank
-        print("\n4. Median Rank:")
-        radar_to_text_median_rank = np.median([int(1.0/r) for r in radar_to_text_ranks])
-        text_to_radar_median_rank = np.median([int(1.0/r) for r in text_to_radar_ranks])
+        results['radar_to_text_median_rank'] = np.median(all_r2t_ranks)
+        results['text_to_radar_median_rank'] = np.median(all_t2r_ranks)
 
-        results['radar_to_text_median_rank'] = radar_to_text_median_rank
-        results['text_to_radar_median_rank'] = text_to_radar_median_rank
+        # Classification accuracy (same as Recall@1)
+        results['radar_to_text_accuracy'] = results['radar_to_text_recall@1']
+        results['text_to_radar_accuracy'] = results['text_to_radar_recall@1']
 
-        print(f"  Radar→Text Median Rank: {radar_to_text_median_rank}")
-        print(f"  Text→Radar Median Rank: {text_to_radar_median_rank}")
+        # Similarity statistics
+        results['diag_similarity_mean'] = np.mean(all_diag_similarities)
+        results['diag_similarity_std'] = np.std(all_diag_similarities)
+        results['off_diag_similarity_mean'] = np.mean(all_off_diag_similarities)
+        results['off_diag_similarity_std'] = np.std(all_off_diag_similarities)
+        results['separation'] = results['diag_similarity_mean'] - results['off_diag_similarity_mean']
 
-        return results, similarity_matrix
+        return results
 
     def analyze_similarity_distribution(self, similarity_matrix):
         """Analyze similarity score distribution"""
@@ -277,31 +333,49 @@ class CLIPEvaluator:
         print(f"\nResults saved to: {output_path}")
 
     def run_evaluation(self, output_path=None):
-        """Run complete evaluation"""
+        """Run complete evaluation with batch-wise negative sampling"""
         print("=" * 60)
-        print("CLIP Model Evaluation")
+        print("CLIP Model Evaluation (Batch-wise)")
         print("=" * 60)
+        print(f"Batch Size: {self.test_dataloader.batch_size}")
+        print(f"Evaluation Mode: {'DEBUG - Detailed Output' if self.debug else 'Standard - Summary Only'}")
 
-        # Extract features
-        radar_features, text_features, captions = self.extract_features()
+        # Extract features and evaluate batch-wise
+        results, captions = self.extract_features()
 
-        # Evaluate retrieval
-        results, similarity_matrix = self.evaluate_retrieval(radar_features, text_features)
+        # Print batch-wise evaluation results
+        print(f"\n📊 Batch-wise Evaluation Results (Batch Size: {self.test_dataloader.batch_size}):")
+        print(f"  Radar → Text:")
+        print(f"    Recall@1:  {results['radar_to_text_recall@1']:.4f}")
+        print(f"    Recall@5:  {results['radar_to_text_recall@5']:.4f}")
+        print(f"    Recall@10: {results['radar_to_text_recall@10']:.4f}")
+        print(f"    MRR:        {results['radar_to_text_mrr']:.4f}")
+        print(f"    Median Rank: {results['radar_to_text_median_rank']:.1f}")
 
-        # Analyze similarity distribution
-        self.analyze_similarity_distribution(similarity_matrix)
+        print(f"  Text → Radar:")
+        print(f"    Recall@1:  {results['text_to_radar_recall@1']:.4f}")
+        print(f"    Recall@5:  {results['text_to_radar_recall@5']:.4f}")
+        print(f"    Recall@10: {results['text_to_radar_recall@10']:.4f}")
+        print(f"    MRR:        {results['text_to_radar_mrr']:.4f}")
+        print(f"    Median Rank: {results['text_to_radar_median_rank']:.1f}")
 
-        # Evaluate classification accuracy
-        acc_r2t, acc_t2r = self.evaluate_classification_accuracy(similarity_matrix)
-        results['radar_to_text_accuracy'] = acc_r2t
-        results['text_to_radar_accuracy'] = acc_t2r
+        print(f"\n📈 Similarity Analysis:")
+        print(f"  Correct pairs (diagonal):")
+        print(f"    Mean: {results['diag_similarity_mean']:.4f} ± {results['diag_similarity_std']:.4f}")
+        print(f"  Incorrect pairs (off-diagonal):")
+        print(f"    Mean: {results['off_diag_similarity_mean']:.4f} ± {results['off_diag_similarity_std']:.4f}")
+        print(f"  Separation: {results['separation']:.4f}")
+
+        # Add classification accuracy
+        results['radar_to_text_accuracy'] = results['radar_to_text_recall@1']
+        results['text_to_radar_accuracy'] = results['text_to_radar_recall@1']
 
         # Save results
         if output_path:
             self.save_results(results, output_path)
 
         print("\n" + "=" * 60)
-        print("Evaluation Complete!")
+        print("Batch-wise Evaluation Complete!")
         print("=" * 60)
 
         return results
@@ -312,11 +386,15 @@ def main():
     parser.add_argument('--model_path', type=str, required=True,
                         help='Path to trained model checkpoint')
     parser.add_argument('--config_path', type=str, required=True,
-                        help='Path to model configuration file')
+                        help='Path to model configuration file (YAML format)')
     parser.add_argument('--output_path', type=str, default='clip_evaluation_results.json',
                         help='Path to save evaluation results')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use for evaluation')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug mode to show detailed prediction results for each batch')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Override batch size for evaluation (default: use config file value)')
 
     args = parser.parse_args()
 
@@ -324,16 +402,19 @@ def main():
     evaluator = CLIPEvaluator(
         model_path=args.model_path,
         config_path=args.config_path,
-        device=args.device
+        device=args.device,
+        debug=args.debug,
+        batch_size=args.batch_size
     )
 
     # Run evaluation
     results = evaluator.run_evaluation(output_path=args.output_path)
 
-    print(f"\n📊 Final Results Summary:")
-    for key, value in results.items():
-        if isinstance(value, float):
-            print(f"  {key}: {value:.4f}")
+    if not args.debug:  # Only show summary if not in debug mode (debug shows detailed info)
+        print(f"\n📊 Final Results Summary:")
+        for key, value in results.items():
+            if isinstance(value, float):
+                print(f"  {key}: {value:.4f}")
 
 
 if __name__ == "__main__":
