@@ -1,463 +1,401 @@
-import os
+"""
+CLIP model using the new abstraction layer.
+
+This module provides a clean, extensible CLIP implementation
+that integrates with the mmExpert framework's core abstractions.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import pytorch_lightning as pl
-from easydict import EasyDict as edict
+from typing import Dict, Any, Optional, List, Tuple
 
-from .clip_transformer import Transformer, build_attention_mask, LayerNorm
-from .clip_text_encoder import TextEncoder
-from .clip_radar_encoder import RadarEncoder
-from .clip_loss import create_loss
-from .sequence_similarity import SequenceLoss, SequenceSimilarity
-
-# Suppress specific warning from transformers
-import warnings
-warnings.filterwarnings("ignore", message="`clean_up_tokenization_spaces` was not set. It will be set to `True` by default.")
+from ..core.base import BaseModel, ModalityData, ModalityType, EncodingResult
+from ..core.config import ModelConfig
+from ..core.registry import register_model
+from ..core.factory import auto_factory
+from ..core.injection import injectable, ServiceLifetime
+from ..encoders.radar_encoder import RadarEncoder
+from ..encoders.text_encoder import TextEncoder
 
 
-class CLIP(pl.LightningModule):
+@register_model(
+    name="clip_model",
+    description="CLIP model with abstraction layer integration",
+    tags=["clip", "multimodal", "model"]
+)
+@injectable(ServiceLifetime.TRANSIENT)
+class CLIPModel(BaseModel):
     """
-    CLIP model for radar data with parallel encoders.
-    - Uses three parallel encoders for range_time, doppler_time, azimuth_time views
-    - The transformer processes the fused radar features
+    CLIP model using the new abstraction layer.
+
+    This model provides:
+    - Clean separation of concerns
+    - Flexible encoder configuration
+    - Improved similarity computation
+    - Better error handling
+    - Extensible architecture
     """
+
     def __init__(self,
-                 encoder_cfg: dict,
-                 text_cfg: dict,
-                 # transformer cfg
-                 context_length: int,
-                 transformer_width: int,
-                 transformer_layers: int,
-                 transformer_heads: int,
-                 # training cfg
-                 temperature: float,
+                 name: str = "clip_model",
+                 modality_types: List[str] = None,
+                 embed_dim: int = 512,
+                 temperature: float = 0.07,
                  use_siglip: bool = False,
-                 learning_rate: float = 1.0e-04,
+                 learning_rate: float = 1e-4,
                  max_epochs: int = 50,
-                 # sequence similarity cfg
-                 use_sequence_similarity: bool = False,
-                 sequence_similarity_type: str = "combined",
-                 sequence_similarity_weight: float = 0.5):
-        super().__init__()
+                 encoder_configs: Dict[str, Any] = None,
+                 **kwargs):
+        """
+        Initialize CLIP model.
 
-        # Radar encoder
-        self.radar_encoder = RadarEncoder(**encoder_cfg)
-        encoder_embed_dim = encoder_cfg['embed_dim']
-
-        self.text_encoder = TextEncoder(**text_cfg)
-        # Get actual embed_dim from the text encoder
-        text_embed_dim = text_cfg.get('embed_dim', 3072)  # Default fallback
-        self.text_projection = nn.Linear(text_embed_dim, encoder_embed_dim)
-
-        # Transformer setup
-        self.context_length = context_length
-        self.transformer = Transformer(
-            width=transformer_width,
-            layers=transformer_layers,
-            heads=transformer_heads,
-            attn_mask=build_attention_mask(context_length)
+        Args:
+            name: Model name
+            modality_types: List of supported modality types
+            embed_dim: Embedding dimension
+            temperature: Temperature parameter for similarity
+            use_siglip: Whether to use SigLIP loss
+            learning_rate: Learning rate for training
+            max_epochs: Maximum number of training epochs
+            encoder_configs: Configuration for encoders
+            **kwargs: Additional parameters
+        """
+        super().__init__(
+            name=name,
+            modality_types=[ModalityType(t) for t in (modality_types or ["radar", "text"])],
+            **kwargs
         )
-        scale = transformer_width ** -0.5
-        self.eot_token = nn.Parameter(scale * torch.randn(transformer_width))
-        self.positional_embedding = nn.Parameter(torch.empty(self.context_length, transformer_width))
-        self.ln_final = LayerNorm(transformer_width)
 
+        self.embed_dim = embed_dim
+        self.temperature = temperature
         self.use_siglip = use_siglip
-        if use_siglip:
-            # Improved initialization for SigLIP
-            # Logit scale: smaller initial value for better stability
-            # Based on SigLIP paper, logit_scale should start small and learn
-            init_logit_scale = np.log(1 / 0.07)  # Similar to CLIP's temperature
-            self.logit_scale = nn.Parameter(torch.tensor(init_logit_scale))
-
-            # Logit bias: initialize to 0 or slightly negative for better sigmoid activation
-            # Starting with 0 allows the model to learn the optimal bias
-            self.logit_bias = nn.Parameter(torch.tensor(0.0))
-        else:
-            self.logit_scale = 1 / temperature
-
-        loss_args = edict({
-            'gather_with_grad': True,
-            'rank': int(os.environ.get('RANK', 0)),
-            'world_size': int(os.environ.get('WORLD_SIZE', 1)),
-            'horovod': False,
-            'local_loss': False,
-            'siglip': use_siglip,
-            'loss_dist_impl': 'bidir',
-        })
-        self.loss_fn = create_loss(loss_args)
-
-        # Sequence similarity configuration
-        self.use_sequence_similarity = use_sequence_similarity
-        self.sequence_similarity_weight = sequence_similarity_weight
-
-        if self.use_sequence_similarity:
-            self.sequence_loss_fn = SequenceLoss(
-                embed_dim=encoder_embed_dim,
-                similarity_type=sequence_similarity_type,
-                temperature=temperature,
-                use_siglip=use_siglip
-            )
-
         self.learning_rate = learning_rate
         self.max_epochs = max_epochs
 
-        # Training step counter for adaptive normalization
+        # Initialize encoder configurations
+        if encoder_configs is None:
+            encoder_configs = {
+                "radar": {
+                    "embed_dim": embed_dim,
+                    "num_layers": 4,
+                    "num_heads": 8,
+                    "dropout": 0.1
+                },
+                "text": {
+                    "embed_dim": embed_dim,
+                    "model_name": "bert-base-uncased",
+                    "max_length": 77,
+                    "pooling_strategy": "cls"
+                }
+            }
+
+        # Create encoders
+        self._create_encoders(encoder_configs)
+
+        # Initialize similarity parameters
+        if use_siglip:
+            init_logit_scale = np.log(1 / temperature)
+            self.logit_scale = nn.Parameter(torch.tensor(init_logit_scale))
+            self.logit_bias = nn.Parameter(torch.tensor(0.0))
+        else:
+            self.logit_scale = 1.0 / temperature
+
+        # Training parameters
         self._training_step = 0
-        self._log_norm_stats = False  # Set to True for debugging normalization
 
-        self.initialize_parameters()
-        self.configure_optimizers()
+    def _create_encoders(self, encoder_configs: Dict[str, Any]) -> None:
+        """Create encoders based on configurations."""
+        # Create radar encoder
+        if "radar" in encoder_configs:
+            radar_config = encoder_configs["radar"]
+            self.radar_encoder = RadarEncoder(**radar_config)
+            self.add_encoder(ModalityType.RADAR, self.radar_encoder)
 
-    def initialize_parameters(self):
-        if self.text_projection is not None:
-            nn.init.normal_(self.text_projection.weight, std=0.01)
+        # Create text encoder
+        if "text" in encoder_configs:
+            text_config = encoder_configs["text"]
+            self.text_encoder = TextEncoder(**text_config)
+            self.add_encoder(ModalityType.TEXT, self.text_encoder)
 
-        nn.init.normal_(self.positional_embedding, std=0.01)
-        proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
-        attn_std = self.transformer.width ** -0.5
-        fc_std = (2 * self.transformer.width) ** -0.5
-        for block in self.transformer.resblocks:
-            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
-            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
-            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
-            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
-
-    @property
-    def dtype(self):
-        # Get dtype from the first parameter of radar encoder
-        return next(self.radar_encoder.parameters()).dtype
-
-
-    def encode_radar(self, range_data, doppler_data, azimuth_data, return_sequence=False):
+    def encode(self,
+               data: Dict[ModalityType, ModalityData],
+               return_sequences: bool = False,
+               **kwargs) -> Dict[ModalityType, EncodingResult]:
         """
-        Encode radar data using parallel encoders.
+        Encode multimodal data.
 
         Args:
-            range_data: [b, 256, T] range-time spectrum
-            doppler_data: [b, 128, T] doppler-time spectrum
-            azimuth_data: [b, 128, T] azimuth-time spectrum
-            return_sequence: If True, returns full sequence; otherwise returns pooled representation
+            data: Dictionary mapping modalities to data
+            return_sequences: Whether to return sequence-level features
+            **kwargs: Additional encoding arguments
 
         Returns:
-            features: [b, embed_dim] if return_sequence=False, or [b, seq_len, embed_dim] if True
+            Dictionary of encoding results for each modality
         """
-        x = self.radar_encoder(range_data, doppler_data, azimuth_data)  # [b, n, embed_dim]
+        results = {}
 
-        # Apply transformer
-        x = torch.cat([x, self.eot_token.to(x.dtype) + torch.zeros_like(x[:, :1, :])], dim=1)
-        x = x + self.positional_embedding.to(x.dtype)
-        x = self.transformer(x)
-        x = self.ln_final(x)  # Apply layer norm to entire sequence
+        for modality, modality_data in data.items():
+            encoder = self.get_encoder(modality)
+            if encoder is None:
+                raise ValueError(f"No encoder found for modality: {modality}")
 
-        if return_sequence:
-            # Return full sequence without EOT token for sequence-level processing
-            return x[:, :-1, :]  # [b, seq_len, embed_dim]
-        else:
-            # Return EOT token representation for compatibility
-            return x[:, -1, :]  # [b, embed_dim]
+            # Encode data
+            result = encoder.encode(modality_data, return_sequence=return_sequences, **kwargs)
+            results[modality] = result
 
-    def encode_text(self, text, device='cuda', return_sequence=False):
-        x = self.text_encoder.encode(text, device=device, return_sequence=return_sequence)
-        if return_sequence:
-            # Apply projection to each token in the sequence
-            x = self.text_projection(x)  # [b, seq_len, embed_dim]
-        else:
-            # Apply projection to pooled representation
-            x = self.text_projection(x)
-        return x
+        return results
 
-    def forward(self, radar_data, text, return_sequences=False):
+    def compute_similarity(self,
+                          features_1: Dict[ModalityType, torch.Tensor],
+                          features_2: Dict[ModalityType, torch.Tensor],
+                          **kwargs) -> torch.Tensor:
         """
-        Forward pass for CLIP with radar data.
+        Compute similarity between feature sets.
 
         Args:
-            radar_data: Dict with keys 'range_time', 'doppler_time', 'azimuth_time'
+            features_1: First set of features
+            features_2: Second set of features
+            **kwargs: Additional similarity arguments
+
+        Returns:
+            Similarity tensor
+        """
+        # For CLIP, we typically compute similarity between radar and text features
+        radar_features_1 = features_1.get(ModalityType.RADAR)
+        text_features_1 = features_1.get(ModalityType.TEXT)
+        radar_features_2 = features_2.get(ModalityType.RADAR)
+        text_features_2 = features_2.get(ModalityType.TEXT)
+
+        # Normalize features
+        if radar_features_1 is not None:
+            radar_features_1 = F.normalize(radar_features_1, p=2, dim=-1)
+        if text_features_1 is not None:
+            text_features_1 = F.normalize(text_features_1, p=2, dim=-1)
+        if radar_features_2 is not None:
+            radar_features_2 = F.normalize(radar_features_2, p=2, dim=-1)
+        if text_features_2 is not None:
+            text_features_2 = F.normalize(text_features_2, p=2, dim=-1)
+
+        # Compute similarity matrix
+        if radar_features_1 is not None and text_features_2 is not None:
+            # Radar to text similarity
+            similarity = torch.matmul(radar_features_1, text_features_2.T)
+        elif text_features_1 is not None and radar_features_2 is not None:
+            # Text to radar similarity
+            similarity = torch.matmul(text_features_1, radar_features_2.T)
+        elif radar_features_1 is not None and radar_features_2 is not None:
+            # Radar to radar similarity
+            similarity = torch.matmul(radar_features_1, radar_features_2.T)
+        elif text_features_1 is not None and text_features_2 is not None:
+            # Text to text similarity
+            similarity = torch.matmul(text_features_1, text_features_2.T)
+        else:
+            raise ValueError("No valid feature pairs found for similarity computation")
+
+        # Apply temperature scaling
+        if not self.use_siglip:
+            similarity = similarity * self.logit_scale
+
+        return similarity
+
+    def forward(self,
+                radar_data: Dict[str, torch.Tensor],
+                text: List[str],
+                return_sequences: bool = False,
+                **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Forward pass for training/inference.
+
+        Args:
+            radar_data: Dictionary with radar data
             text: List of text captions
-            return_sequences: If True, also returns sequence-level features
+            return_sequences: Whether to return sequence features
+            **kwargs: Additional arguments
 
         Returns:
-            radar_features: [b, embed_dim] normalized radar features
-            text_features: [b, embed_dim] normalized text features
-            radar_seq: [b, seq_len, embed_dim] radar sequence features (if return_sequences=True)
-            text_seq: [b, seq_len, embed_dim] text sequence features (if return_sequences=True)
+            Tuple of (radar_features, text_features) or (radar_features, text_features, radar_seq, text_seq)
         """
-        radar_features = self.encode_radar(
-            radar_data['range_time'],
-            radar_data['doppler_time'],
-            radar_data['azimuth_time'],
-            return_sequence=return_sequences
+        # Create modality data objects
+        radar_modality_data = ModalityData(
+            data=radar_data,
+            modality=ModalityType.RADAR,
+            metadata={"format": "multi_view"}
         )
 
-        # Get device from the first non-None radar data
-        device = None
-        if radar_data['range_time'] is not None:
-            device = radar_data['range_time'].device
-        elif radar_data['doppler_time'] is not None:
-            device = radar_data['doppler_time'].device
-        elif radar_data['azimuth_time'] is not None:
-            device = radar_data['azimuth_time'].device
-        else:
-            raise ValueError("All radar data is None, cannot determine device")
+        text_modality_data = ModalityData(
+            data=text,
+            modality=ModalityType.TEXT,
+            metadata={"format": "string_list"}
+        )
 
-        text_features = self.encode_text(text, device=device, return_sequence=return_sequences)
+        # Encode data
+        encoding_results = self.encode(
+            {
+                ModalityType.RADAR: radar_modality_data,
+                ModalityType.TEXT: text_modality_data
+            },
+            return_sequences=return_sequences
+        )
+
+        # Extract features
+        radar_features = encoding_results[ModalityType.RADAR].features
+        text_features = encoding_results[ModalityType.TEXT].features
+
+        # Normalize features
+        radar_features = F.normalize(radar_features, p=2, dim=-1)
+        text_features = F.normalize(text_features, p=2, dim=-1)
 
         if return_sequences:
-            radar_seq = radar_features
-            text_seq = text_features
+            radar_seq = encoding_results[ModalityType.RADAR].sequence_features
+            text_seq = encoding_results[ModalityType.TEXT].sequence_features
 
-            # Also compute pooled features for compatibility with existing loss
-            radar_pooled = radar_seq.mean(dim=1)
-            text_pooled = text_seq.mean(dim=1)
+            # Normalize sequence features
+            radar_seq = F.normalize(radar_seq, p=2, dim=-1)
+            text_seq = F.normalize(text_seq, p=2, dim=-1)
 
-            radar_pooled = self._normalize_features(radar_pooled, feature_type="radar")
-            text_pooled = self._normalize_features(text_pooled, feature_type="text")
-
-            return radar_pooled, text_pooled, radar_seq, text_seq
+            return radar_features, text_features, radar_seq, text_seq
         else:
-            # Improved feature normalization with numerical stability
-            radar_features = self._normalize_features(radar_features, feature_type="radar")
-            text_features = self._normalize_features(text_features, feature_type="text")
             return radar_features, text_features
 
-    def encode_sequences(self, radar_data, text):
+    def compute_loss(self,
+                     radar_features: torch.Tensor,
+                     text_features: torch.Tensor,
+                     **kwargs) -> Dict[str, torch.Tensor]:
         """
-        Encode radar and text data to sequences.
+        Compute CLIP loss.
 
         Args:
-            radar_data: Dict with keys 'range_time', 'doppler_time', 'azimuth_time'
-            text: List of text captions
+            radar_features: Encoded radar features
+            text_features: Encoded text features
+            **kwargs: Additional loss arguments
 
         Returns:
-            radar_seq: [b, seq_len, embed_dim] radar sequence features
-            text_seq: [b, seq_len, embed_dim] text sequence features
+            Dictionary with loss values
         """
-        radar_seq = self.encode_radar(
-            radar_data['range_time'],
-            radar_data['doppler_time'],
-            radar_data['azimuth_time'],
-            return_sequence=True
-        )
+        batch_size = radar_features.size(0)
 
-        # Get device from the first non-None radar data
-        device = None
-        if radar_data['range_time'] is not None:
-            device = radar_data['range_time'].device
-        elif radar_data['doppler_time'] is not None:
-            device = radar_data['doppler_time'].device
-        elif radar_data['azimuth_time'] is not None:
-            device = radar_data['azimuth_time'].device
-        else:
-            raise ValueError("All radar data is None, cannot determine device")
+        # Compute similarity matrix
+        logits = torch.matmul(radar_features, text_features.T) * self.logit_scale
 
-        text_seq = self.encode_text(text, device=device, return_sequence=True)
+        # Create labels
+        labels = torch.arange(batch_size, device=radar_features.device)
 
-        # Normalize sequences
-        radar_seq = self._normalize_sequence_features(radar_seq, feature_type="radar")
-        text_seq = self._normalize_sequence_features(text_seq, feature_type="text")
+        # Compute losses
+        loss_radar_to_text = F.cross_entropy(logits, labels)
+        loss_text_to_radar = F.cross_entropy(logits.T, labels)
 
-        return radar_seq, text_seq
+        # Total loss
+        total_loss = (loss_radar_to_text + loss_text_to_radar) / 2
 
-    def _normalize_sequence_features(self, features: torch.Tensor, feature_type: str = "generic", eps: float = 1e-8) -> torch.Tensor:
-        """
-        Normalize sequence features.
-
-        Args:
-            features: Input features [b, seq_len, embed_dim]
-            feature_type: Type of features for debugging
-            eps: Small constant for numerical stability
-
-        Returns:
-            Normalized features [b, seq_len, embed_dim]
-        """
-        if features is None:
-            raise ValueError(f"Cannot normalize None features for {feature_type}")
-
-        # Ensure features are 3D [batch_size, seq_len, feature_dim]
-        if features.dim() != 3:
-            raise ValueError(f"Expected 3D sequence features for {feature_type}, got {features.dim()}D")
-
-        # Compute L2 norm for each sequence element
-        features_norm = torch.norm(features, p=2, dim=-1, keepdim=True)
-        features_norm = torch.clamp(features_norm, min=eps)  # Prevent division by zero
-
-        # L2 normalization
-        normalized_features = features / features_norm
-
-        return normalized_features
-
-    def _normalize_features(self, features: torch.Tensor, feature_type: str = "generic", eps: float = 1e-8) -> torch.Tensor:
-        """
-        Improved feature normalization with numerical stability and SigLIP compatibility.
-
-        Args:
-            features: Input features [b, embed_dim]
-            feature_type: Type of features ("radar", "text", "generic") for debugging
-            eps: Small constant for numerical stability
-
-        Returns:
-            Normalized features
-        """
-        if features is None:
-            raise ValueError(f"Cannot normalize None features for {feature_type}")
-
-        # Ensure features are 2D [batch_size, feature_dim]
-        if features.dim() != 2:
-            raise ValueError(f"Expected 2D features for {feature_type}, got {features.dim()}D")
-
-        # Compute L2 norm with numerical stability
-        features_norm = torch.norm(features, p=2, dim=1, keepdim=True)
-        features_norm = torch.clamp(features_norm, min=eps)  # Prevent division by zero
-
-        # Basic L2 normalization
-        normalized_features = features / features_norm
-
-        # Additional normalization strategies for SigLIP vs standard CLIP
-        if self.use_siglip:
-            # For SigLIP, we can use slightly more aggressive normalization
-            # to improve training stability with sigmoid loss
-            if hasattr(self, '_training_step') and self._training_step < 1000:
-                # Early training: use adaptive normalization
-                # This helps with convergence in early stages
-                adaptive_scale = min(1.0, self._training_step / 1000.0)
-                normalized_features = adaptive_scale * normalized_features + (1 - adaptive_scale) * features / features_norm
-        else:
-            # For standard CLIP, strict L2 normalization is typically better
-            pass
-
-        # Optional: Log normalization statistics for debugging
-        if hasattr(self, '_log_norm_stats') and self._log_norm_stats:
-            with torch.no_grad():
-                mean_norm = features_norm.mean().item()
-                std_norm = features_norm.std().item()
-                print(f"[{feature_type}] Feature norms - Mean: {mean_norm:.6f}, Std: {std_norm:.6f}")
-
-        return normalized_features
-
-    def compute_loss(self, batch):
-        radar_features = batch['radar_features'] if 'radar_features' in batch else batch['image_features']
-        text_features = batch['text_features']
-
-        # Standard CLIP loss
-        if not self.use_siglip:
-            loss_clip = self.loss_fn(radar_features, text_features, logit_scale=self.logit_scale)
-        else:
-            loss_clip = self.loss_fn(radar_features, text_features, logit_scale=self.logit_scale, logit_bias=self.logit_bias)
-
-        loss_dict = {'loss_clip': loss_clip}
-
-        # Add sequence similarity loss if enabled
-        if self.use_sequence_similarity and 'radar_seq' in batch and 'text_seq' in batch:
-            if not self.use_siglip:
-                loss_seq = self.sequence_loss_fn(batch['radar_seq'], batch['text_seq'], logit_scale=self.logit_scale)
-            else:
-                loss_seq = self.sequence_loss_fn(batch['radar_seq'], batch['text_seq'], logit_scale=self.logit_scale, logit_bias=self.logit_bias)
-
-            # Weight the sequence loss
-            loss_seq = self.sequence_similarity_weight * loss_seq
-            loss_dict['loss_seq'] = loss_seq
-            loss_dict['loss_total'] = loss_clip + loss_seq
-
-        return loss_dict
-
-    def shared_step(self, batch, batch_idx, phase='train'):
-        # Determine batch size from non-None radar data
-        if batch['input_wave_range'] is not None:
-            self.batch_size = batch['input_wave_range'].size(0)
-        elif batch['input_wave_doppler'] is not None:
-            self.batch_size = batch['input_wave_doppler'].size(0)
-        elif batch['input_wave_azimuth'] is not None:
-            self.batch_size = batch['input_wave_azimuth'].size(0)
-        else:
-            raise ValueError("All radar views are None")
-
-        # Handle radar data with None support
-        radar_data = {
-            'range_time': batch['input_wave_range'],    # Could be None
-            'doppler_time': batch['input_wave_doppler'],  # Could be None
-            'azimuth_time': batch['input_wave_azimuth']   # Could be None
+        return {
+            "loss_clip": total_loss,
+            "loss_radar_to_text": loss_radar_to_text,
+            "loss_text_to_radar": loss_text_to_radar
         }
-        text = batch['caption']
 
-        if self.use_sequence_similarity:
-            # Get both pooled and sequence features
-            radar_features, text_features, radar_seq, text_seq = self.forward(radar_data, text, return_sequences=True)
-            batch['radar_seq'] = radar_seq
-            batch['text_seq'] = text_seq
-        else:
-            # Get only pooled features
-            radar_features, text_features = self.forward(radar_data, text, return_sequences=False)
+    def get_training_parameters(self) -> List[torch.nn.Parameter]:
+        """Get parameters for training."""
+        params = []
 
-        batch['radar_features'] = radar_features
-        batch['image_features'] = radar_features  # For compatibility with loss computation
-        batch['text_features'] = text_features
+        # Add encoder parameters
+        if hasattr(self, 'radar_encoder'):
+            params.extend(list(self.radar_encoder.parameters()))
+        if hasattr(self, 'text_encoder'):
+            params.extend(list(self.text_encoder.parameters()))
 
-        return batch
+        # Add similarity parameters
+        if self.use_siglip:
+            params.extend([self.logit_scale, self.logit_bias])
 
-    def training_step(self, batch, batch_idx):
-        # Update training step counter
-        self._training_step += 1
-
-        batch = self.shared_step(batch, batch_idx, phase='train')
-        loss_dict = self.compute_loss(batch)
-        self.log_loss(loss_dict, phase='train')
-
-        # Display loss in progress bar with more details
-        if 'loss_total' in loss_dict:
-            # Use total loss when sequence similarity is enabled
-            self.log('train_loss', loss_dict['loss_total'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
-            return loss_dict['loss_total']
-        else:
-            # Use standard CLIP loss when sequence similarity is disabled
-            self.log('train_loss', loss_dict['loss_clip'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
-            return loss_dict['loss_clip']
-
-        # Also log learning rate for monitoring (safely)
-        try:
-            if hasattr(self, 'trainer') and self.trainer is not None and hasattr(self.trainer, 'optimizers') and self.trainer.optimizers:
-                current_lr = self.trainer.optimizers[0].param_groups[0]['lr']
-                self.log('lr', current_lr, prog_bar=True, logger=False, on_step=True, on_epoch=False)
-        except (AttributeError, IndexError):
-            pass  # Skip if trainer or optimizers not available
-
-    def validation_step(self, batch, batch_idx):
-        batch = self.shared_step(batch, batch_idx, phase='valid')
-        loss_dict = self.compute_loss(batch)
-        self.log_loss(loss_dict, phase='valid')
-
-        # Display loss in progress bar
-        if 'loss_total' in loss_dict:
-            # Use total loss when sequence similarity is enabled
-            self.log('val_loss', loss_dict['loss_total'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
-            return loss_dict['loss_total']
-        else:
-            # Use standard CLIP loss when sequence similarity is disabled
-            self.log('val_loss', loss_dict['loss_clip'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
-            return loss_dict['loss_clip']
+        return params
 
     def configure_optimizers(self):
-        lr = self.learning_rate
+        """Configure optimizers for training."""
+        # Create parameter groups with different learning rates
+        param_groups = []
 
-        param_groups = [
-            {'params': self.text_encoder.parameters(), 'lr': lr / 2},
-            {'params': self.text_projection.parameters(), 'lr': lr},
-            {'params': self.radar_encoder.parameters(), 'lr': lr},
-            {'params': self.transformer.parameters(), 'lr': lr},
-        ]
+        if hasattr(self, 'text_encoder'):
+            param_groups.append({
+                'params': self.text_encoder.parameters(),
+                'lr': self.learning_rate / 2
+            })
 
-        # Add sequence similarity parameters if enabled
-        if self.use_sequence_similarity:
-            param_groups.append({'params': self.sequence_loss_fn.parameters(), 'lr': lr})
+        if hasattr(self, 'radar_encoder'):
+            param_groups.append({
+                'params': self.radar_encoder.parameters(),
+                'lr': self.learning_rate
+            })
 
-        opt = torch.optim.AdamW(param_groups, betas=(0.5, 0.9), weight_decay=0.01)
+        if self.use_siglip:
+            param_groups.append({
+                'params': [self.logit_scale, self.logit_bias],
+                'lr': self.learning_rate
+            })
 
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.max_epochs, eta_min=0)
-        return [opt], [scheduler]
+        optimizer = torch.optim.AdamW(param_groups, betas=(0.5, 0.9), weight_decay=0.01)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.max_epochs, eta_min=0)
 
-    def log_loss(self, loss_dict, phase='train'):
-        for k, v in loss_dict.items():
-            self.log(phase + '/' + k, v, on_step=self.training, on_epoch=not self.training,
-                     logger=True, batch_size=self.batch_size, rank_zero_only=True, sync_dist=False, add_dataloader_idx=False)
-        del loss_dict
+        return optimizer, scheduler
+
+    def save_pretrained(self, save_directory: str) -> None:
+        """Save model configuration and weights."""
+        import os
+        import json
+
+        os.makedirs(save_directory, exist_ok=True)
+
+        # Save configuration
+        config = {
+            "name": self.name,
+            "embed_dim": self.embed_dim,
+            "temperature": self.temperature,
+            "use_siglip": self.use_siglip,
+            "learning_rate": self.learning_rate,
+            "max_epochs": self.max_epochs,
+            "modality_types": [m.value for m in self.modality_types]
+        }
+
+        with open(os.path.join(save_directory, "config.json"), "w") as f:
+            json.dump(config, f, indent=2)
+
+        # Save model weights
+        torch.save(self.state_dict(), os.path.join(save_directory, "pytorch_model.bin"))
+
+    @classmethod
+    def from_pretrained(cls, model_directory: str) -> 'CLIPModel':
+        """Load model from saved directory."""
+        import os
+        import json
+
+        # Load configuration
+        with open(os.path.join(model_directory, "config.json"), "r") as f:
+            config = json.load(f)
+
+        # Create model
+        model = cls(**config)
+
+        # Load weights
+        model.load_state_dict(torch.load(os.path.join(model_directory, "pytorch_model.bin")))
+
+        return model
+
+
+# Factory function for creating CLIP model
+def create_clip_model(config: ModelConfig) -> CLIPModel:
+    """Create CLIP model from configuration."""
+    return CLIPModel(
+        name=config.name,
+        modality_types=config.modality_types,
+        embed_dim=config.embed_dim,
+        temperature=config.temperature,
+        use_siglip=config.get("use_siglip", False),
+        learning_rate=config.learning_rate,
+        max_epochs=config.max_epochs,
+        encoder_configs=config.get("encoder_configs")
+    )
+
+
+# Register factory
+auto_factory._factory_map["model"]["clip_model"] = create_clip_model

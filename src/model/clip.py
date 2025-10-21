@@ -4,8 +4,20 @@ import os
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
 os.environ['HF_HUB_OFFLINE'] = '1'
 
-# Import all components from the modularized files
-from .clip_transformer import *
-from .clip_text_encoder import *
-from .clip_radar_encoder import *
-from .clip_model import *
+# Import the refactored CLIP model
+from .clip_model import CLIPModel as CLIP
+from ..encoders.radar_encoder import RadarEncoder
+from ..encoders.text_encoder import TextEncoder
+
+# Import transformer components
+from .clip_transformer import Transformer, build_attention_mask, LayerNorm
+
+# Legacy imports for backward compatibility
+__all__ = [
+    'CLIP',
+    'RadarEncoder',
+    'TextEncoder',
+    'Transformer',
+    'build_attention_mask',
+    'LayerNorm'
+]
