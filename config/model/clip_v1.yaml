@@ -1,0 +1,20 @@
+# CLIP v1 model configuration for radar data
+target: src.model.clip.CLIP
+params:
+  # Training parameters
+  max_epochs: 50
+  learning_rate: 5.0e-05
+  temperature: 0.07              # CLIP temperature parameter
+
+  # Encoder configurations
+  encoder_configs:
+    radar:
+      embed_dim: 256      # Feature embedding dimension
+      dropout: 0.1        # Dropout rate
+
+    text:
+      model_name: 'sentence-transformers/paraphrase-MiniLM-L6-v2'
+      embed_dim: 256
+      max_length: 77
+      pooling_strategy: 'pooler'
+      freeze_backbone: true

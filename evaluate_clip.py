@@ -25,7 +25,7 @@ sys.path.append('/root/autodl-tmp/mmExpert')
 
 from src.model.clip import CLIP
 from src.data_interface import HumanDInterface
-from src.misc.io import load_yaml
+from src.misc.io import load_config
 from easydict import EasyDict as edict
 import pytorch_lightning as pl
 
@@ -50,7 +50,7 @@ class CLIPEvaluator:
         print(f"Loading model from {self.model_path}")
 
         # Load config using YAML loader
-        config = load_yaml(self.config_path)
+        config = load_config(self.config_path)
 
         model_cfg = config['model_cfg']['params']
         model = CLIP(**model_cfg)
@@ -72,7 +72,7 @@ class CLIPEvaluator:
         print("Loading test dataset...")
 
         # Load config using YAML loader
-        config = load_yaml(self.config_path)
+        config = load_config(self.config_path)
 
         data_cfg = config['data_cfg']
 

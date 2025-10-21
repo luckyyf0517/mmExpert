@@ -38,7 +38,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from swanlab.integration.pytorch_lightning import SwanLabLogger
 import swanlab
 
-from src.misc.io import load_yaml
+from src.misc.io import load_config
 from src.misc.tools import instantiate_from_config
 
 
@@ -52,32 +52,56 @@ def set_seed(seed, n_gpu):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', dest="config", default=None, required=False)
+    parser.add_argument('--config', dest="config", default=None, required=True)
     parser.add_argument("--resume-checkpoint", default=None, type=str, required=False)
     parser.add_argument("--version", '-v', default=None, type=str, required=False)
-    parser.add_argument('--seed', dest="seed", default=88, help="random seed")
+    parser.add_argument('--seed', dest="seed", default=88, type=int, help="random seed")
     parser.add_argument('--test', dest="test", action="store_true", default=False)
-    
+
+    # Add configuration control arguments
+    parser.add_argument('--log-dir', dest="log_dir", default='log/', type=str, help="log directory")
+    parser.add_argument('--strategy', dest="strategy", default='ddp', type=str, help="training strategy")
+
+    # Allow separate data and model config files
+    parser.add_argument('--data-config', dest="data_config", default=None, type=str, help="data config file path")
+    parser.add_argument('--model-config', dest="model_config", default=None, type=str, help="model config file path")
+
     args = parser.parse_args()
-    if args.test: 
+    if args.test:
         assert args.resume_checkpoint is not None
-    
+
     args.rank = int(os.environ.get('RANK'))
     args.world_size = int(os.environ.get('WORLD_SIZE'))
     return args
 
 
-if __name__ == '__main__': 
+if __name__ == '__main__':
     args = parse_args()
-    
-    cfg = load_yaml(args.config)
+
+    # Load configurations using args
+    if args.data_config is not None and args.model_config is not None:
+        # Load separate data and model configs
+        cfg = load_config(None, args.data_config, args.model_config)
+        config_name = f"{args.data_config.replace('config/data/', '').replace('.yaml', '')}_{args.model_config.replace('config/model/', '').replace('.yaml', '')}"
+    else:
+        # Load from main config file
+        cfg = load_config(args.config)
+        config_name = args.config.replace('.yaml', '').replace('config/', '')
+
     if args.version is None:
-        base_version = args.config.replace('.yaml', '').replace('config/', '')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.version = f"{base_version}_{timestamp}"
-    
-    os.makedirs(os.path.join(cfg.log_dir, args.version), exist_ok=True)
-    shutil.copy(args.config, os.path.join(cfg.log_dir, args.version, 'config.yaml'))
+        args.version = f"{config_name}_{timestamp}"
+
+    # Create log directory using args
+    log_dir = os.path.join(args.log_dir, args.version)
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Save config files for reference
+    if args.data_config is not None and args.model_config is not None:
+        shutil.copy(args.data_config, os.path.join(log_dir, 'data_config.yaml'))
+        shutil.copy(args.model_config, os.path.join(log_dir, 'model_config.yaml'))
+    else:
+        shutil.copy(args.config, os.path.join(log_dir, 'config.yaml'))
     
     data_cfg = cfg.data_cfg
     data_cfg.params.cfg.batch_size = data_cfg.params.cfg.batch_size // args.world_size # for each gpu
@@ -96,30 +120,30 @@ if __name__ == '__main__':
         pass
 
     logger = SwanLabLogger(name=args.version, project='mmExpert')
-    if not args.resume_checkpoint and args.rank == 0: 
-        for log_file in glob.glob(os.path.join(cfg.log_dir, args.version, '*.ckpt')): 
-            os.remove(log_file) 
-    
+    if not args.resume_checkpoint and args.rank == 0:
+        for log_file in glob.glob(os.path.join(log_dir, '*.ckpt')):
+            os.remove(log_file)
+
     checkpoint_callback = ModelCheckpoint(
-        dirpath=os.path.join(cfg.log_dir, args.version),
+        dirpath=log_dir,
         monitor='valid/loss_clip',
         filename='epoch_{epoch:02d}_val_{valid/loss_clip:.4f}',
         save_top_k=10,
         mode='min',
-        auto_insert_metric_name=False, 
+        auto_insert_metric_name=False,
         save_last=True,
         save_weights_only=False,)
-    
+
     trainer = Trainer(
-        accelerator='gpu', 
-        devices=args.world_size, 
-        strategy=cfg.strategy, 
-        logger=logger, 
-        log_every_n_steps=1, 
-        max_epochs=cfg.model_cfg.params.max_epochs, 
+        accelerator='gpu',
+        devices=args.world_size,
+        strategy=args.strategy,
+        logger=logger,
+        log_every_n_steps=1,
+        max_epochs=cfg.model_cfg.params.max_epochs,
         num_sanity_val_steps=2, # run validation step experimentaly
-        reload_dataloaders_every_n_epochs=1, 
-        callbacks=[checkpoint_callback], 
+        reload_dataloaders_every_n_epochs=1,
+        callbacks=[checkpoint_callback],
         enable_progress_bar=True) 
 
     if not args.test:

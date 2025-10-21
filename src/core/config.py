@@ -455,7 +455,23 @@ config_manager = ConfigManager()
 def load_config(config_path: Union[str, Path],
                environment: Optional[str] = None) -> Dict[str, Any]:
     """Load configuration from file."""
-    return config_manager.load_config(config_path, environment=environment)
+    config_dict = config_manager.load_config(config_path, environment=environment)
+
+    # Resolve data config
+    if isinstance(config_dict.get('data_cfg'), str):
+        data_path = config_dict['data_cfg']
+        if not os.path.isabs(data_path):
+            data_path = os.path.join(os.path.dirname(str(config_path)), data_path)
+        config_dict['data_cfg'] = config_manager.load_config(data_path)
+
+    # Resolve model config
+    if isinstance(config_dict.get('model_cfg'), str):
+        model_path = config_dict['model_cfg']
+        if not os.path.isabs(model_path):
+            model_path = os.path.join(os.path.dirname(str(config_path)), model_path)
+        config_dict['model_cfg'] = config_manager.load_config(model_path)
+
+    return config_dict
 
 
 def save_config(config: Dict[str, Any],
