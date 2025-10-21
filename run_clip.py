@@ -40,6 +40,7 @@ import swanlab
 
 from src.misc.io import load_config
 from src.misc.tools import instantiate_from_config
+from src.misc.config_printer import print_core_config
 
 
 def set_seed(seed, n_gpu):
@@ -104,11 +105,14 @@ if __name__ == '__main__':
     
     # Set random seed
     set_seed(seed=args.seed, n_gpu=args.world_size)
-    
+
+    # Print core configuration parameters
+    print_core_config(args, log_dir, cfg)
+
     # Instantiate model
     model_cfg = cfg.model_cfg
     model = instantiate_from_config(model_cfg)
-    
+
     # End previous SwanLab experiment (if exists)
     try:
         swanlab.finish()
