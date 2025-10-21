@@ -35,12 +35,10 @@ class RadarEncoder(BaseEncoder):
     def __init__(self,
                  embed_dim: int = 512,
                  input_dims: Dict[str, int] = None,
-                 num_layers: int = 4,
-                 num_heads: int = 8,
                  dropout: float = 0.1,
                  max_sequence_length: int = 496,
                  use_layer_norm: bool = True,
-                 activation: str = "gelu",
+                 use_positional_encoding: bool = False,
                  **kwargs):
         """
         Initialize radar encoder.
@@ -48,15 +46,16 @@ class RadarEncoder(BaseEncoder):
         Args:
             embed_dim: Embedding dimension
             input_dims: Input dimensions for each radar view
-            num_layers: Number of transformer layers
-            num_heads: Number of attention heads
             dropout: Dropout rate
             max_sequence_length: Maximum sequence length
             use_layer_norm: Whether to use layer normalization
-            activation: Activation function
-            **kwargs: Additional parameters
+            use_positional_encoding: Whether to use positional encoding for sequences
+                                     (only needed if you plan to use sequence features)
+            **kwargs: Additional parameters (ignored, for compatibility)
         """
-        super().__init__(embed_dim=embed_dim, modality=ModalityType.RADAR, **kwargs)
+        super().__init__(embed_dim=embed_dim, modality=ModalityType.RADAR)
+        
+        self.use_positional_encoding = use_positional_encoding
 
         # Default input dimensions if not provided
         if input_dims is None:
@@ -67,8 +66,6 @@ class RadarEncoder(BaseEncoder):
             }
 
         self.input_dims = input_dims
-        self.num_layers = num_layers
-        self.num_heads = num_heads
         self.dropout = dropout
         self.max_sequence_length = max_sequence_length
         self.use_layer_norm = use_layer_norm
@@ -82,9 +79,6 @@ class RadarEncoder(BaseEncoder):
         total_views = len(input_dims)
         self.fusion_layer = nn.Linear(embed_dim * total_views, embed_dim)
 
-        # Positional encoding
-        self.positional_encoding = self._create_positional_encoding()
-
         # Layer normalization
         if use_layer_norm:
             self.layer_norm = nn.LayerNorm(embed_dim)
@@ -93,6 +87,13 @@ class RadarEncoder(BaseEncoder):
 
         # Dropout
         self.dropout_layer = nn.Dropout(dropout)
+
+        # Positional encoding (only created if use_positional_encoding=True)
+        # This avoids DDP unused parameter error when not using sequence features
+        if use_positional_encoding:
+            self.positional_encoding = nn.Embedding(self.max_sequence_length, self.embed_dim)
+        else:
+            self.positional_encoding = None
 
         # Sequence support
         self._supports_sequence = True
@@ -109,10 +110,6 @@ class RadarEncoder(BaseEncoder):
             nn.ReLU(),
             nn.AdaptiveAvgPool1d(self.max_sequence_length)
         )
-
-    def _create_positional_encoding(self) -> nn.Embedding:
-        """Create positional encoding for sequences."""
-        return nn.Embedding(self.max_sequence_length, self.embed_dim)
 
     def _initialize_parameters(self) -> None:
         """Initialize model parameters."""
@@ -156,21 +153,23 @@ class RadarEncoder(BaseEncoder):
         else:
             raise ValueError(f"Unsupported radar data format: {type(radar_data)}")
 
-        # Apply positional encoding if sequence
-        if return_sequence and features.dim() == 3:
+        # Apply positional encoding if requested and available
+        if return_sequence and features.dim() == 3 and self.positional_encoding is not None:
             seq_len = features.size(1)
             positions = torch.arange(seq_len, device=features.device)
             pos_encoding = self.positional_encoding(positions).unsqueeze(0)
             features = features + pos_encoding
-
+            
         # Apply layer normalization and dropout
         features = self.layer_norm(features)
         features = self.dropout_layer(features)
 
+        # Pool features
+        pooled_features = features.mean(dim=1)
+        
         # Create encoding result
         if return_sequence and features.dim() == 3:
             # Return sequence features
-            pooled_features = features.mean(dim=1)
             return EncodingResult(
                 features=pooled_features,
                 sequence_features=features,
@@ -183,7 +182,7 @@ class RadarEncoder(BaseEncoder):
         else:
             # Return pooled features
             return EncodingResult(
-                features=features,
+                features=pooled_features,
                 metadata={
                     "modality": "radar",
                     "embed_dim": self.embed_dim
@@ -291,14 +290,11 @@ def create_radar_encoder(config: EncoderConfig) -> RadarEncoder:
     return RadarEncoder(
         embed_dim=config.embed_dim,
         input_dims=config.get("input_dims"),
-        num_layers=config.num_layers,
-        num_heads=config.num_heads,
         dropout=config.dropout,
         max_sequence_length=config.get("max_sequence_length", 496),
         use_layer_norm=config.get("use_layer_norm", True),
-        activation=config.get("activation", "gelu")
+        use_positional_encoding=config.get("use_positional_encoding", False)
     )
 
 
-# Register factory
-auto_factory._factory_map["encoder"]["radar_encoder"] = create_radar_encoder
+# Component is automatically registered via @register_encoder decorator

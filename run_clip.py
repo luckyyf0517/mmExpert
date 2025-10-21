@@ -36,6 +36,7 @@ disable_possible_user_warnings()
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from swanlab.integration.pytorch_lightning import SwanLabLogger
+import swanlab
 
 from src.misc.io import load_yaml
 from src.misc.tools import instantiate_from_config
@@ -87,7 +88,13 @@ if __name__ == '__main__':
     
     model_cfg = cfg.model_cfg
     model = instantiate_from_config(model_cfg)
-    
+
+    # End previous SwanLab experiment (if exists)
+    try:
+        swanlab.finish()
+    except:
+        pass
+
     logger = SwanLabLogger(name=args.version, project='mmExpert')
     if not args.resume_checkpoint and args.rank == 0: 
         for log_file in glob.glob(os.path.join(cfg.log_dir, args.version, '*.ckpt')): 

@@ -62,10 +62,18 @@ class TextEncoder(BaseEncoder):
         self.freeze_backbone = freeze_backbone
         self.use_layer_norm = use_layer_norm
 
-        # Load tokenizer and model
+        # Load tokenizer and model with local cache preference
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.backbone = AutoModel.from_pretrained(model_name)
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                local_files_only=True,
+                trust_remote_code=False
+            )
+            self.backbone = AutoModel.from_pretrained(
+                model_name,
+                local_files_only=True,
+                trust_remote_code=False
+            )
 
             # Set padding token if not present
             if self.tokenizer.pad_token is None:
@@ -76,6 +84,11 @@ class TextEncoder(BaseEncoder):
 
         # Get backbone embedding dimension
         backbone_dim = self.backbone.config.hidden_size
+
+        # Remove unused pooler layer to avoid DDP unused parameter error
+        # We use our own pooling strategy instead of the model's pooler
+        if hasattr(self.backbone, 'pooler'):
+            self.backbone.pooler = None
 
         # Projection layer to match embed_dim
         self.projection = nn.Linear(backbone_dim, embed_dim)
@@ -151,13 +164,13 @@ class TextEncoder(BaseEncoder):
         # Apply pooling
         if return_sequence:
             # Return full sequence after projection
-            pooled_features = self._apply_pooling(hidden_states, inputs.attention_mask)
+            pooled_features = self._apply_pooling(hidden_states, inputs['attention_mask'])
             sequence_features = self.projection(hidden_states)
             sequence_features = self.layer_norm(sequence_features)
             sequence_features = self.dropout_layer(sequence_features)
         else:
             # Return pooled features
-            pooled_features = self._apply_pooling(hidden_states, inputs.attention_mask)
+            pooled_features = self._apply_pooling(hidden_states, inputs['attention_mask'])
             sequence_features = None
 
         # Project to embed_dim
@@ -169,7 +182,7 @@ class TextEncoder(BaseEncoder):
         return EncodingResult(
             features=pooled_features,
             sequence_features=sequence_features,
-            attention_mask=inputs.attention_mask,
+            attention_mask=inputs['attention_mask'],
             metadata={
                 "modality": "text",
                 "model_name": self.model_name,
@@ -244,6 +257,10 @@ class TextEncoder(BaseEncoder):
         """
         if self.pooling_strategy == "cls":
             # Use CLS token (first token)
+            return hidden_states[:, 0, :]
+        elif self.pooling_strategy == "pooler":
+            # Use CLS token (same as "cls" since we removed the model's pooler)
+            # The projection layer after pooling serves as the pooler transformation
             return hidden_states[:, 0, :]
         elif self.pooling_strategy == "mean":
             # Mean pooling over non-padded tokens
@@ -328,5 +345,4 @@ def create_text_encoder(config: EncoderConfig) -> TextEncoder:
     )
 
 
-# Register factory
-auto_factory._factory_map["encoder"]["text_encoder"] = create_text_encoder
+# Component is automatically registered via @register_encoder decorator
