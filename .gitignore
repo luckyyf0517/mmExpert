@@ -10,3 +10,5 @@ output
 results
 swanlog
 tmp
+
+config/model/experiments*

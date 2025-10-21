@@ -130,20 +130,30 @@ def analyze_model_structure(model_name, verbose=False):
         print()
     
     # 4. Freezing Recommendations
-    print("💡 Freezing Strategy Recommendations")
+    print("💡 Freezing Strategy Recommendations (New unfreeze_last_layers Option)")
     print("-" * 80)
     
     if hasattr(model.config, 'num_hidden_layers'):
         num_layers = model.config.num_hidden_layers
         
         recommendations = [
-            ["Small Dataset (<5K)", f"freeze_layers: {num_layers - 1}", "Freeze all but last layer"],
-            ["Medium Dataset (5K-50K)", f"freeze_layers: {num_layers // 2}", "Freeze bottom half"],
-            ["Large Dataset (>50K)", f"freeze_layers: {num_layers // 4}", "Freeze bottom quarter"],
+            ["Small Dataset (<5K)", "unfreeze_last_layers: 1", f"Train last 1/{num_layers} layer + projection (Recommended ⭐)"],
+            ["Medium Dataset (5K-50K)", "unfreeze_last_layers: 2", f"Train last 2/{num_layers} layers + projection"],
+            ["Large Dataset (>50K)", "unfreeze_last_layers: 3", f"Train last 3/{num_layers} layers + projection"],
             ["Very Large Dataset", "freeze_backbone: false", "Fine-tune all layers"],
+            ["Minimal Training", "freeze_backbone: true", "Only train projection layer"],
         ]
         
         print(tabulate(recommendations, 
+                      headers=['Dataset Size', 'Config (Most Intuitive)', 'Description'], 
+                      tablefmt='grid'))
+        
+        print("\n💡 Alternative: freeze_layers (need to know total layer count)")
+        alt_recommendations = [
+            ["Small Dataset", f"freeze_layers: {num_layers - 1}", f"Freeze first {num_layers - 1} layers"],
+            ["Medium Dataset", f"freeze_layers: {num_layers // 2}", f"Freeze first {num_layers // 2} layers"],
+        ]
+        print(tabulate(alt_recommendations, 
                       headers=['Dataset Size', 'Config', 'Description'], 
                       tablefmt='grid'))
     
@@ -168,49 +178,31 @@ def analyze_model_structure(model_name, verbose=False):
                       tablefmt='simple'))
         print()
     
-    # 6. Example freeze_pattern Usage
-    print("📋 Example freeze_pattern Usage")
+    # 6. Example Configuration Usage
+    print("📋 Example Configuration Usage")
     print("-" * 80)
-    
-    # Get some example parameter names
-    param_names = [name for name, _ in model.named_parameters()]
     
     examples = []
     
-    # Example 1: Freeze embeddings
-    if any('embeddings' in name for name in param_names):
-        examples.append([
-            "Freeze embeddings only",
-            "freeze_pattern: 'embeddings'"
-        ])
+    # unfreeze_last_layers examples (Most intuitive)
+    examples.append(["🌟 Recommended", "unfreeze_last_layers: 1", "Train only last layer + projection"])
+    examples.append(["🌟 Recommended", "unfreeze_last_layers: 2", "Train last 2 layers + projection"])
     
-    # Example 2: Freeze first few layers
+    # freeze_layers examples
     if hasattr(model.config, 'num_hidden_layers'):
         num_layers = model.config.num_hidden_layers
-        examples.append([
-            f"Freeze first {num_layers // 2} layers",
-            f"freeze_pattern: 'encoder.layer.[0-{num_layers // 2 - 1}]'"
-        ])
-        examples.append([
-            f"Freeze first 3 layers (precise)",
-            "freeze_pattern: 'encoder.layer.(0|1|2)'"
-        ])
+        examples.append(["Alternative", f"freeze_layers: {num_layers - 1}", f"Same as unfreeze_last_layers: 1 (but need to know {num_layers} layers)"])
     
-    # Example 3: Freeze attention layers
-    if any('attention' in name for name in param_names):
-        examples.append([
-            "Freeze all attention layers",
-            "freeze_pattern: 'attention'"
-        ])
+    # freeze_pattern examples (Advanced)
+    examples.append(["Advanced", "freeze_pattern: 'embeddings'", "Freeze only embeddings"])
+    examples.append(["Advanced", "freeze_pattern: 'encoder.layer.[0-2]'", "Freeze first 3 layers using regex"])
+    examples.append(["Advanced", "freeze_pattern: 'attention'", "Freeze all attention layers"])
     
-    # Example 4: Freeze LayerNorm
-    if any('LayerNorm' in name for name in param_names):
-        examples.append([
-            "Freeze all LayerNorm",
-            "freeze_pattern: 'LayerNorm'"
-        ])
+    # Simple examples
+    examples.append(["Simple", "freeze_backbone: true", "Freeze all, only train projection"])
+    examples.append(["Simple", "freeze_backbone: false", "Fine-tune everything"])
     
-    print(tabulate(examples, headers=['Goal', 'Configuration'], tablefmt='grid'))
+    print(tabulate(examples, headers=['Type', 'Configuration', 'Effect'], tablefmt='grid'))
     print()
     
     # 7. Test a sample input

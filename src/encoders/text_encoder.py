@@ -40,6 +40,7 @@ class TextEncoder(BaseEncoder):
                  freeze_backbone: bool = False,
                  freeze_pattern: str = None,
                  freeze_layers: int = 0,
+                 unfreeze_last_layers: int = 0,
                  dropout: float = 0.1,
                  use_layer_norm: bool = True,
                  **kwargs):
@@ -61,6 +62,11 @@ class TextEncoder(BaseEncoder):
             freeze_layers: Number of transformer layers to freeze from bottom
                           0 = freeze nothing, -1 = freeze all (same as freeze_backbone=True)
                           e.g., 6 = freeze first 6 layers out of 12
+            unfreeze_last_layers: Number of transformer layers to keep trainable from top (most intuitive)
+                                 0 = freeze all layers (only train projection)
+                                 1 = train only last layer + projection
+                                 2 = train last 2 layers + projection
+                                 This is more intuitive than freeze_layers as you don't need to know total layer count
             dropout: Dropout rate
             use_layer_norm: Whether to use layer normalization
             **kwargs: Additional parameters
@@ -73,6 +79,7 @@ class TextEncoder(BaseEncoder):
         self.freeze_backbone = freeze_backbone
         self.freeze_pattern = freeze_pattern
         self.freeze_layers = freeze_layers
+        self.unfreeze_last_layers = unfreeze_last_layers
         self.use_layer_norm = use_layer_norm
 
         # Load tokenizer and model with local cache preference
@@ -117,6 +124,9 @@ class TextEncoder(BaseEncoder):
 
         # Apply freezing strategy (priority: freeze_pattern > freeze_layers > freeze_backbone)
         self._apply_freezing_strategy()
+        
+        # Determine if all backbone parameters are frozen (for gradient optimization)
+        self._all_frozen = all(not p.requires_grad for p in self.backbone.parameters())
 
         # Sequence support
         self._supports_sequence = True
@@ -127,8 +137,9 @@ class TextEncoder(BaseEncoder):
         
         Priority:
         1. freeze_pattern (regex-based) - most flexible
-        2. freeze_layers (layer-count based) - common use case
-        3. freeze_backbone (all or nothing) - simplest
+        2. unfreeze_last_layers (most intuitive) - keep last N layers trainable
+        3. freeze_layers (layer-count based) - freeze first N layers
+        4. freeze_backbone (all or nothing) - simplest
         """
         import re
         
@@ -146,7 +157,35 @@ class TextEncoder(BaseEncoder):
             print(f"TextEncoder: Froze {frozen_count} parameters matching pattern '{pattern}'")
             return
         
-        # Strategy 2: Layer-count based freezing
+        # Strategy 2: Unfreeze last N layers (most intuitive)
+        if self.unfreeze_last_layers > 0:
+            frozen_count = 0
+            
+            # First freeze everything
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+                frozen_count += 1
+            
+            # Then unfreeze last N layers
+            if hasattr(self.backbone, 'encoder') and hasattr(self.backbone.encoder, 'layer'):
+                total_layers = len(self.backbone.encoder.layer)
+                layers_to_unfreeze = min(self.unfreeze_last_layers, total_layers)
+                start_layer = total_layers - layers_to_unfreeze
+                
+                unfrozen_count = 0
+                for i in range(start_layer, total_layers):
+                    for param in self.backbone.encoder.layer[i].parameters():
+                        param.requires_grad = True
+                        unfrozen_count += 1
+                        frozen_count -= 1
+                
+                print(f"TextEncoder: Unfroze last {layers_to_unfreeze}/{total_layers} layers ({unfrozen_count} parameters), "
+                      f"froze {frozen_count} parameters")
+            else:
+                print(f"TextEncoder: Warning - could not find encoder.layer structure, froze all {frozen_count} parameters")
+            return
+        
+        # Strategy 3: Freeze first N layers
         if self.freeze_layers != 0:
             frozen_count = 0
             
@@ -239,8 +278,8 @@ class TextEncoder(BaseEncoder):
         device = next(self.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        # Encode with backbone
-        with torch.set_grad_enabled(not self.freeze_backbone):
+        # Encode with backbone (disable gradient if all params are frozen)
+        with torch.set_grad_enabled(not self._all_frozen):
             outputs = self.backbone(**inputs)
 
         # Extract hidden states
@@ -293,8 +332,8 @@ class TextEncoder(BaseEncoder):
         # Create attention mask (assuming padding token is 0)
         attention_mask = (tokenized_data != 0).long()
 
-        # Encode with backbone
-        with torch.set_grad_enabled(not self.freeze_backbone):
+        # Encode with backbone (disable gradient if all params are frozen)
+        with torch.set_grad_enabled(not self._all_frozen):
             outputs = self.backbone(input_ids=tokenized_data, attention_mask=attention_mask)
 
         # Extract hidden states
@@ -427,6 +466,7 @@ def create_text_encoder(config: EncoderConfig) -> TextEncoder:
         freeze_backbone=config.get("freeze_backbone", False),
         freeze_pattern=config.get("freeze_pattern", None),
         freeze_layers=config.get("freeze_layers", 0),
+        unfreeze_last_layers=config.get("unfreeze_last_layers", 0),
         dropout=config.dropout,
         use_layer_norm=config.get("use_layer_norm", True)
     )
