@@ -147,7 +147,7 @@ class Text2DopplerDatasetV2():
         self.max_motion_length = opt.max_motion_length
         self.min_motion_len = opt.min_motion_len
         self.data_list = self._load_data(split_file, data_scale)
-        self.udoppler_postfix = opt.get('udoppler_postfix')
+        self.mmwave_postfix = opt.get('mmwave_postfix', '')
 
     def _load_data(self, split_file, data_scale):
         """Load and scale dataset."""
@@ -159,7 +159,7 @@ class Text2DopplerDatasetV2():
     def _get_radar_path(self, data_dict):
         """Get radar NPZ file path."""
         motion_folder = data_dict['filefolder']
-        motion_folder = motion_folder.replace('udoppler', 'mmwave' + self.udoppler_postfix)
+        motion_folder = motion_folder.replace('udoppler', 'mmwave' + self.mmwave_postfix)
         motion_index = data_dict['fileindex']
 
         # Return NPZ file path (radar format from DATA_FORMAT.md)

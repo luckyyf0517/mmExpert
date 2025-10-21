@@ -384,6 +384,8 @@ def display_config_details(data_cfg):
             print(f"    Unit length:       {opt.unit_length}")
             print(f"    Normalize:         {opt.normalize}")
             print(f"    Radar views:       {opt.radar_views}")
+            if hasattr(opt, 'mmwave_postfix'):
+                print(f"    MMWave postfix:    '{opt.mmwave_postfix}'")
 
         # Display training parameters
         if hasattr(cfg, 'batch_size'):
