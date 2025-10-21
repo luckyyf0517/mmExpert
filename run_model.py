@@ -8,6 +8,7 @@ import random
 import argparse
 import logging
 import numpy as np
+from datetime import datetime
 
 import sys
 sys.path.append('.')
@@ -69,8 +70,10 @@ if __name__ == '__main__':
     args = parse_args()
     
     cfg = load_yaml(args.config)
-    if args.version is None: 
-        args.version = args.config.replace('.yaml', '').replace('config/', '')
+    if args.version is None:
+        base_version = args.config.replace('.yaml', '').replace('config/', '')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.version = f"{base_version}_{timestamp}"
     
     os.makedirs(os.path.join(cfg.log_dir, args.version), exist_ok=True)
     shutil.copy(args.config, os.path.join(cfg.log_dir, args.version, 'config.yaml'))
