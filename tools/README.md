@@ -87,6 +87,26 @@ tmp/preview/
 └── ...
 ```
 
+### File Summary Output
+When `--save-images` is enabled, the tool provides a comprehensive summary at the end:
+
+```bash
+[FILES] Images saved to directory:  /path/to/preview
+[FILES] Total saved files: 4
+[FILES] Saved image files:
+         1. sample_001_azimuth_spectrum.png (0.20 MB)
+         2. sample_001_doppler_spectrum.png (0.24 MB)
+         3. sample_001_range_spectrum.png (0.18 MB)
+         4. sample_001_summary.png (0.35 MB)
+```
+
+Features:
+- **Directory listing**: Shows the output directory path
+- **File count**: Total number of saved image files
+- **File details**: Individual files with sizes in MB
+- **Sorted display**: Files shown in alphabetical order
+- **Size information**: Each file's disk usage for monitoring storage
+
 ### Example Output
 ```
 [SUCCESS] Data interface setup completed

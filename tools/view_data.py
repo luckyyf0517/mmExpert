@@ -182,7 +182,7 @@ def parse_args():
                        help='Number of samples to display (default: 3)')
     parser.add_argument('--model-config', type=str, default=None,
                        help='Path to model configuration file (for complete setup test)')
-    parser.add_argument('--save-images', action='store_true', default=False,
+    parser.add_argument('--save-images', action='store_true', default=True,
                        help='Save spectrum images and summary plots')
     parser.add_argument('--output-dir', type=str, default=None,
                        help='Output directory for saved images (default: tmp/preview)')
@@ -246,7 +246,7 @@ def load_data_sample_from_dataset(data_interface, num_samples=3, save_images=Fal
             if i >= num_samples:
                 break
 
-            print(f"\n--- Sample {i+1} ---")
+            print(f"\n--- Sample {i} ---")
 
             # Extract batch data (assuming dict structure)
             if isinstance(batch, dict):
@@ -459,6 +459,27 @@ def main():
 
             print(colored("\n[INFO] The dataset preprocessing pipeline is working correctly!", 'blue', attrs=['bold']))
             print(colored(f"[INFO] Use this tool to verify data before training experiments", 'yellow'))
+
+            # Output saved files summary if images were saved
+            if args.save_images and preview_dir:
+                saved_files = []
+                try:
+                    for root, dirs, files in os.walk(preview_dir):
+                        for file in files:
+                            if file.endswith(('.png', '.jpg', '.jpeg')):
+                                saved_files.append(os.path.join(root, file))
+
+                    if saved_files:
+                        print(colored(f"\n[FILES] Images saved to directory:", 'cyan', attrs=['bold']))
+                        print(colored(f"        {preview_dir}", 'cyan'))
+                        print(colored(f"[FILES] Total saved files: {len(saved_files)}", 'green'))
+                        print(colored("[FILES] Saved image files:", 'blue'))
+                        for i, file_path in enumerate(sorted(saved_files), 1):
+                            file_size = os.path.getsize(file_path)
+                            file_size_mb = file_size / (1024 * 1024)  # Convert to MB
+                            print(colored(f"        {i:2d}. {os.path.basename(file_path)} ({file_size_mb:.2f} MB)", 'white'))
+                except Exception as e:
+                    print(colored(f"[ERROR] Failed to list saved files: {e}", 'red'))
 
         else:
             print(colored("[ERROR] No data samples were loaded", 'red'))
