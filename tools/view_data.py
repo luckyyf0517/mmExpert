@@ -35,25 +35,9 @@ def normalize_data_for_display(data, target_range=(0, 255)):
     return data_normalized
 
 
-def create_beautiful_summary_cv2(wave_data, caption, sample_idx, preview_dir):
-    """Create a beautiful summary plot using OpenCV with professional layout."""
+def create_beautiful_summary_plt(wave_data, caption, sample_idx, preview_dir):
+    """Create a clean vertical spectrum plot using OpenCV."""
     try:
-        # Canvas size - high resolution
-        canvas_width = 1920
-        canvas_height = 1080
-        margin = 50
-        plot_start_y = margin
-
-        # Create white background
-        canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.uint8) * 255
-
-        # Title
-        title_text = f"Data Summary - Sample {sample_idx}"
-        cv2.putText(canvas, title_text,
-                   (canvas_width//2 - 200, plot_start_y + 60),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 100, 100), 3)
-        plot_start_y += 100
-
         # Define view configurations
         views = [
             ('input_wave_range', 'Range-Time'),
@@ -61,112 +45,125 @@ def create_beautiful_summary_cv2(wave_data, caption, sample_idx, preview_dir):
             ('input_wave_azimuth', 'Azimuth-Time')
         ]
 
-        # Plot each view
-        plot_height = 300
-        plot_width = (canvas_width - 3 * margin) // 4
-        individual_width = plot_width - 250  # Reserve space for stats
+        # Get available views
+        available_views = [(key, title) for key, title in views if key in wave_data]
+        n_views = len(available_views)
 
-        for i, (key, title) in enumerate(views):
-            if key not in wave_data:
-                continue
+        if n_views == 0:
+            print(colored("[ERROR] No valid spectrum views found", 'red'))
+            return False
 
+        # Get all data to determine common dimensions
+        all_data = []
+        for key, title in available_views:
+            if len(wave_data[key].shape) == 3:
+                data = wave_data[key][0].cpu().numpy()
+            else:
+                data = wave_data[key].cpu().numpy()
+
+            if len(data.shape) == 2:
+                all_data.append(data)
+
+        if not all_data:
+            print(colored("[ERROR] No valid data found", 'red'))
+            return False
+
+        # Find common dimensions - use the max width and height among all spectra
+        max_height = max(data.shape[0] for data in all_data)
+        max_width = max(data.shape[1] for data in all_data)
+
+        # Process each spectrum and create equal-sized images
+        processed_spectra = []
+        spectrum_info = []  # Store spectrum information for terminal output
+
+        for key, title in available_views:
             # Get data and handle batch dimension
             if len(wave_data[key].shape) == 3:
                 data = wave_data[key][0].cpu().numpy()
             else:
                 data = wave_data[key].cpu().numpy()
 
-            # Calculate position
-            x_start = margin + i * (plot_width // 3)
-            y_start = plot_start_y
+            # Validate data dimensions before processing
+            if len(data.shape) != 2:
+                print(colored(f"[ERROR] Unexpected data shape for {key}: {data.shape}", 'red'))
+                continue
 
-            # Create subplot area with subtle border
-            cv2.rectangle(canvas, (x_start-2, y_start-2),
-                          (x_start + plot_width + 2, y_start + plot_height),
-                          (200, 200, 200), -1)
+            # Store spectrum information for terminal output
+            spectrum_info.append({
+                'title': title,
+                'shape': data.shape,
+                'min': data.min(),
+                'max': data.max(),
+                'mean': data.mean(),
+                'std': data.std()
+            })
 
-            # Normalized spectrum image (left side)
-            data_norm = normalize_data_for_display(data)
-            data_resized = cv2.resize(data_norm, (individual_width, plot_height))
-            data_colored = cv2.applyColorMap(data_resized, cv2.COLORMAP_VIRIDIS)
+            # Normalize data to 0-255
+            data_norm = ((data - data.min()) / (data.max() - data.min()) * 255).astype(np.uint8)
 
-            # Place in canvas
-            canvas[y_start:y_start+plot_height, x_start:x_start+individual_width] = data_colored
+            # Apply rainbow colormap
+            # Create colored image with 3 channels
+            colored_spectrum = np.zeros((max_height, max_width, 3), dtype=np.uint8)
 
-            # Title and stats box (right side)
-            title_x = x_start + individual_width + 20
-            cv2.putText(canvas, f"{title} Spectrum",
-                       (title_x, y_start + 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            # Create a square canvas with max dimensions
+            canvas = np.zeros((max_height, max_width), dtype=np.uint8)
 
-            # Statistics
-            stats = [
-                f"Shape: {data.shape}",
-                f"Min: {data.min():.3f}",
-                f"Max: {data.max():.3f}",
-                f"Mean: {data.mean():.3f}",
-                f"Std: {data.std():.3f}",
-                f"Non-zero: {np.count_nonzero(data)}"
-            ]
+            # Calculate center position to place the spectrum
+            y_offset = (max_height - data.shape[0]) // 2
+            x_offset = (max_width - data.shape[1]) // 2
 
-            for j, stat in enumerate(stats):
-                cv2.putText(canvas, stat,
-                           (title_x, y_start + 60 + j * 25),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+            # Place the normalized spectrum in the center
+            canvas[y_offset:y_offset + data.shape[0], x_offset:x_offset + data.shape[1]] = data_norm
 
-            plot_start_y += plot_height + 50
+            # Apply rainbow colormap to the canvas
+            colored_canvas = cv2.applyColorMap(canvas, cv2.COLORMAP_RAINBOW)
 
-        # Caption area with background
-        plot_start_y += 50
-        caption_height = 120
+            processed_spectra.append(colored_canvas)
 
-        # Caption background
-        cv2.rectangle(canvas, (margin, plot_start_y-10),
-                      (canvas_width - margin, plot_start_y + caption_height),
-                      (240, 240, 220), -1)
+        if not processed_spectra:
+            print(colored("[ERROR] No processed spectra created", 'red'))
+            return False
 
-        # Add caption text with word wrap
-        caption_display = str(caption) if isinstance(caption, str) else str(caption[0]) if caption else ""
+        # Create vertical concatenated image with black borders
+        border_thickness = 2  # Black border thickness
 
-        # Word wrap long captions
-        max_chars_per_line = 80
-        if len(caption_display) > max_chars_per_line:
-            words = caption_display.split()
-            lines = []
-            current_line = ""
-            for word in words:
-                if len(current_line + word + " ") <= max_chars_per_line:
-                    current_line += word + " "
-                else:
-                    lines.append(current_line.strip())
-                    current_line = word + " "
-            if current_line.strip():
-                lines.append(current_line.strip())
-        else:
-            lines = [caption_display]
+        # Add border to each spectrum
+        bordered_spectra = []
+        for spectrum in processed_spectra:
+            # Add black border
+            bordered = cv2.copyMakeBorder(spectrum, border_thickness, border_thickness,
+                                         border_thickness, border_thickness, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+            bordered_spectra.append(bordered)
 
-        # Draw caption text
-        for i, line in enumerate(lines[:4]):  # Max 4 lines
-            cv2.putText(canvas, line,
-                       (margin + 20, plot_start_y + 30 + i * 25),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (20, 20, 20), 2)
+        # Vertically concatenate all bordered spectra
+        final_image = np.vstack(bordered_spectra)
 
-        plot_start_y += caption_height + 30
-
-        # Footer with sample info
-        footer_text = f"Sample {sample_idx:03d} - mmExpert Data Visualization"
-        cv2.putText(canvas, footer_text,
-                   (margin, canvas_height - 40),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (150, 150, 150), 2)
-
-        # Save beautiful summary
+        # Save the image using OpenCV
         summary_filename = os.path.join(preview_dir, f"sample_{sample_idx:03d}_summary.png")
-        cv2.imwrite(summary_filename, canvas)
+        cv2.imwrite(summary_filename, final_image)
 
-        print(colored(f"[SUCCESS] Saved beautiful summary: {os.path.basename(summary_filename)}", 'green'))
+        # Display spectrum information in terminal
+        print(colored(f"\n[SPECTRUM SUMMARY - Sample {sample_idx}]", 'cyan', attrs=['bold']))
+        print(colored("="*60, 'cyan'))
+        for i, info in enumerate(spectrum_info):
+            print(colored(f"\n[{i+1}] {info['title']} Spectrum:", 'yellow', attrs=['bold']))
+            print(f"    Shape: {info['shape']}")
+            print(f"    Min:   {info['min']:.3f}")
+            print(f"    Max:   {info['max']:.3f}")
+            print(f"    Mean:  {info['mean']:.3f}")
+            print(f"    Std:   {info['std']:.3f}")
+
+        # Display caption in terminal if provided
+        caption_display = str(caption) if isinstance(caption, str) else str(caption[0]) if caption else ""
+        if caption_display:
+            print(colored(f"\n[CAPTION]:", 'green', attrs=['bold']))
+            print(f"    {caption_display}")
+
+        print(colored(f"\n[SUCCESS] Saved spectrum plot: {os.path.basename(summary_filename)}", 'green'))
         return True
 
     except Exception as e:
-        print(colored(f"[ERROR] Failed to create beautiful summary: {e}", 'red'))
+        print(colored(f"[ERROR] Failed to create vertical spectrum plot: {e}", 'red'))
         return False
 
 
@@ -179,7 +176,7 @@ def parse_args():
                        help='Number of samples to display (default: 3)')
     parser.add_argument('--model-config', type=str, default=None,
                        help='Path to model configuration file (for complete setup test)')
-    parser.add_argument('--save-images', action='store_true', default=False,
+    parser.add_argument('--save-images', action='store_true', default=True,
                        help='Save spectrum images and summary plots')
     parser.add_argument('--output-dir', type=str, default=None,
                        help='Output directory for saved images (default: tmp/preview)')
@@ -281,7 +278,7 @@ def load_data_sample_from_dataset(data_interface, num_samples=3, save_images=Fal
                 elif not isinstance(caption, str):
                     sample_caption = str(caption)
 
-                create_beautiful_summary_cv2(wave_embed, sample_caption, i+1, preview_dir)
+                create_beautiful_summary_plt(wave_embed, sample_caption, i+1, preview_dir)
 
             # Display text information
             if text_data is not None:
@@ -452,7 +449,7 @@ def main():
             print(colored("  [SUCCESS] Handling text captions and tokenization", 'green'))
             print(colored("  [SUCCESS] Batch processing with proper shapes", 'green'))
             print(colored("  [SUCCESS] Displaying tensor statistics and metadata", 'green'))
-            print(colored("  [SUCCESS] Creating beautiful CV2 summaries", 'green'))
+            print(colored("  [SUCCESS] Creating beautiful matplotlib summaries", 'green'))
 
             print(colored("\n[INFO] The dataset preprocessing pipeline is working correctly!", 'blue', attrs=['bold']))
             print(colored(f"[INFO] Use this tool to verify data before training experiments", 'yellow'))

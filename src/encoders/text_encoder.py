@@ -38,6 +38,8 @@ class TextEncoder(BaseEncoder):
                  max_length: int = 77,
                  pooling_strategy: str = "cls",
                  freeze_backbone: bool = False,
+                 freeze_pattern: str = None,
+                 freeze_layers: int = 0,
                  dropout: float = 0.1,
                  use_layer_norm: bool = True,
                  **kwargs):
@@ -48,8 +50,17 @@ class TextEncoder(BaseEncoder):
             embed_dim: Output embedding dimension
             model_name: Pre-trained model name
             max_length: Maximum sequence length
-            pooling_strategy: Pooling strategy ("cls", "mean", "max")
-            freeze_backbone: Whether to freeze backbone parameters
+            pooling_strategy: Pooling strategy ("cls", "mean", "max", "pooler")
+            freeze_backbone: Whether to freeze all backbone parameters
+            freeze_pattern: Regex pattern to match parameter names for freezing
+                           Examples:
+                           - "embeddings" - freeze only embeddings
+                           - "encoder.layer.[0-3]" - freeze layers 0-3
+                           - "encoder.layer.(0|1|2)" - freeze layers 0,1,2
+                           - None - no pattern-based freezing
+            freeze_layers: Number of transformer layers to freeze from bottom
+                          0 = freeze nothing, -1 = freeze all (same as freeze_backbone=True)
+                          e.g., 6 = freeze first 6 layers out of 12
             dropout: Dropout rate
             use_layer_norm: Whether to use layer normalization
             **kwargs: Additional parameters
@@ -60,6 +71,8 @@ class TextEncoder(BaseEncoder):
         self.max_length = max_length
         self.pooling_strategy = pooling_strategy
         self.freeze_backbone = freeze_backbone
+        self.freeze_pattern = freeze_pattern
+        self.freeze_layers = freeze_layers
         self.use_layer_norm = use_layer_norm
 
         # Load tokenizer and model with local cache preference
@@ -102,13 +115,85 @@ class TextEncoder(BaseEncoder):
         else:
             self.layer_norm = nn.Identity()
 
-        # Freeze backbone if requested
-        if freeze_backbone:
-            for param in self.backbone.parameters():
-                param.requires_grad = False
+        # Apply freezing strategy (priority: freeze_pattern > freeze_layers > freeze_backbone)
+        self._apply_freezing_strategy()
 
         # Sequence support
         self._supports_sequence = True
+    
+    def _apply_freezing_strategy(self):
+        """
+        Apply parameter freezing based on specified strategy.
+        
+        Priority:
+        1. freeze_pattern (regex-based) - most flexible
+        2. freeze_layers (layer-count based) - common use case
+        3. freeze_backbone (all or nothing) - simplest
+        """
+        import re
+        
+        # Strategy 1: Pattern-based freezing (highest priority)
+        if self.freeze_pattern is not None:
+            pattern = self.freeze_pattern
+            frozen_count = 0
+            
+            for name, param in self.backbone.named_parameters():
+                # Special case: "all" freezes everything
+                if pattern == "all" or re.search(pattern, name):
+                    param.requires_grad = False
+                    frozen_count += 1
+            
+            print(f"TextEncoder: Froze {frozen_count} parameters matching pattern '{pattern}'")
+            return
+        
+        # Strategy 2: Layer-count based freezing
+        if self.freeze_layers != 0:
+            frozen_count = 0
+            
+            # Freeze all if -1
+            if self.freeze_layers == -1:
+                for param in self.backbone.parameters():
+                    param.requires_grad = False
+                    frozen_count += 1
+                print(f"TextEncoder: Froze all {frozen_count} parameters")
+                return
+            
+            # Freeze first N layers
+            if self.freeze_layers > 0:
+                # Freeze embeddings first
+                if hasattr(self.backbone, 'embeddings'):
+                    for param in self.backbone.embeddings.parameters():
+                        param.requires_grad = False
+                        frozen_count += 1
+                
+                # Freeze transformer layers
+                if hasattr(self.backbone, 'encoder') and hasattr(self.backbone.encoder, 'layer'):
+                    total_layers = len(self.backbone.encoder.layer)
+                    layers_to_freeze = min(self.freeze_layers, total_layers)
+                    
+                    for i in range(layers_to_freeze):
+                        for param in self.backbone.encoder.layer[i].parameters():
+                            param.requires_grad = False
+                            frozen_count += 1
+                    
+                    print(f"TextEncoder: Froze embeddings + first {layers_to_freeze}/{total_layers} layers ({frozen_count} parameters)")
+                else:
+                    print(f"TextEncoder: Warning - could not find encoder.layer structure, froze {frozen_count} parameters")
+                return
+        
+        # Strategy 3: Simple all-or-nothing freezing (lowest priority)
+        if self.freeze_backbone:
+            frozen_count = 0
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+                frozen_count += 1
+            print(f"TextEncoder: Froze all backbone parameters ({frozen_count} total)")
+            return
+        
+        # No freezing
+        total_params = sum(1 for _ in self.backbone.parameters())
+        trainable_params = sum(1 for p in self.backbone.parameters() if p.requires_grad)
+        print(f"TextEncoder: All {trainable_params}/{total_params} backbone parameters are trainable")
 
     def encode(self,
                data: ModalityData,
@@ -340,6 +425,8 @@ def create_text_encoder(config: EncoderConfig) -> TextEncoder:
         max_length=config.get("max_length", 77),
         pooling_strategy=config.get("pooling_strategy", "cls"),
         freeze_backbone=config.get("freeze_backbone", False),
+        freeze_pattern=config.get("freeze_pattern", None),
+        freeze_layers=config.get("freeze_layers", 0),
         dropout=config.dropout,
         use_layer_norm=config.get("use_layer_norm", True)
     )

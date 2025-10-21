@@ -12,7 +12,7 @@ def load_yaml(path):
     return edict(cfg)
 
 
-def load_config(path, data_config_path=None, model_config_path=None):
+def load_config(path=None, data_config_path=None, model_config_path=None):
     """
     Load configuration with automatic data and model config resolution.
 
@@ -20,15 +20,26 @@ def load_config(path, data_config_path=None, model_config_path=None):
         path: Main config file path (optional, for backward compatibility)
         data_config_path: Explicit data config file path
         model_config_path: Explicit model config file path
+    
+    Returns:
+        EasyDict with data_cfg and model_cfg
     """
     # If explicit configs are provided, use them
     if data_config_path is not None and model_config_path is not None:
-        return {
+        return edict({
             'data_cfg': load_yaml(data_config_path),
-            'model_cfg': load_yaml(model_config_path)
-        }
+            'model_cfg': load_yaml(model_config_path) if model_config_path else None
+        })
+    elif data_config_path is not None:
+        return edict({
+            'data_cfg': load_yaml(data_config_path),
+            'model_cfg': None
+        })
 
     # Otherwise, load from main config file (backward compatibility)
+    if path is None:
+        raise ValueError("Either path or data_config_path must be provided")
+
     cfg = load_yaml(path)
 
     # Resolve data config

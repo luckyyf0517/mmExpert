@@ -52,7 +52,6 @@ def set_seed(seed, n_gpu):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', dest="config", default=None, required=True)
     parser.add_argument("--resume-checkpoint", default=None, type=str, required=False)
     parser.add_argument("--version", '-v', default=None, type=str, required=False)
     parser.add_argument('--seed', dest="seed", default=88, type=int, help="random seed")
@@ -63,7 +62,7 @@ def parse_args():
     parser.add_argument('--strategy', dest="strategy", default='ddp', type=str, help="training strategy")
 
     # Allow separate data and model config files
-    parser.add_argument('--data-config', dest="data_config", default=None, type=str, help="data config file path")
+    parser.add_argument('--data-config', dest="data_config", default="config/data/humanml3d.yaml", type=str, help="data config file path")
     parser.add_argument('--model-config', dest="model_config", default=None, type=str, help="model config file path")
 
     args = parser.parse_args()
@@ -79,14 +78,8 @@ if __name__ == '__main__':
     args = parse_args()
 
     # Load configurations using args
-    if args.data_config is not None and args.model_config is not None:
-        # Load separate data and model configs
-        cfg = load_config(None, args.data_config, args.model_config)
-        config_name = f"{args.data_config.replace('config/data/', '').replace('.yaml', '')}_{args.model_config.replace('config/model/', '').replace('.yaml', '')}"
-    else:
-        # Load from main config file
-        cfg = load_config(args.config)
-        config_name = args.config.replace('.yaml', '').replace('config/', '')
+    cfg = load_config(None, args.data_config, args.model_config)
+    config_name = f"{args.data_config.replace('config/data/', '').replace('.yaml', '')}_{args.model_config.replace('config/model/', '').replace('.yaml', '')}"
 
     if args.version is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -101,18 +94,21 @@ if __name__ == '__main__':
         shutil.copy(args.data_config, os.path.join(log_dir, 'data_config.yaml'))
         shutil.copy(args.model_config, os.path.join(log_dir, 'model_config.yaml'))
     else:
-        shutil.copy(args.config, os.path.join(log_dir, 'config.yaml'))
-    
+        raise ValueError("Data-config and model-config must be provided")
+
+    # Instantiate data module
     data_cfg = cfg.data_cfg
-    data_cfg.params.cfg.batch_size = data_cfg.params.cfg.batch_size // args.world_size # for each gpu
+    data_cfg.params.cfg.batch_size = data_cfg.params.cfg.batch_size // args.world_size  # for each gpu
     data = instantiate_from_config(data_cfg)
     data.setup('fit')
     
+    # Set random seed
     set_seed(seed=args.seed, n_gpu=args.world_size)
     
+    # Instantiate model
     model_cfg = cfg.model_cfg
     model = instantiate_from_config(model_cfg)
-
+    
     # End previous SwanLab experiment (if exists)
     try:
         swanlab.finish()

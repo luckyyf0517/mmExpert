@@ -373,23 +373,6 @@ class CLIPModel(pl.LightningModule):
         else:
             return radar_features, text_features
 
-    def compute_loss(self,
-                     radar_features: torch.Tensor,
-                     text_features: torch.Tensor,
-                     **kwargs) -> Dict[str, torch.Tensor]:
-        """
-        Pure loss computation with pre-encoded features as input.
-
-        Args:
-            radar_features: Pre-encoded radar features [B, D]
-            text_features: Pre-encoded text features [B, D]
-            **kwargs: Additional parameters
-
-        Returns:
-            Dictionary of loss values
-        """
-        return self._compute_clip_loss_only(radar_features, text_features)
-
     def _compute_losses_from_features(self,
                                     radar_features: torch.Tensor,
                                     text_features: torch.Tensor,
@@ -469,61 +452,6 @@ class CLIPModel(pl.LightningModule):
                 "loss_radar_to_text": loss_radar_to_text,
                 "loss_text_to_radar": loss_text_to_radar
             }
-
-    def compute_clip_loss(self, modality_data: Dict[ModalityType, ModalityData]) -> Dict[str, torch.Tensor]:
-        """
-        Compute CLIP loss from modality data.
-
-        Args:
-            modality_data: Dictionary mapping modalities to modality data
-
-        Returns:
-            Dictionary with loss values
-        
-        Raises:
-            ValueError: If required modalities are missing or feature shapes are invalid
-        """
-        # Check that both modalities are present
-        if ModalityType.TEXT not in modality_data:
-            raise ValueError(
-                f"TEXT modality missing from input data. "
-                f"Available modalities: {list(modality_data.keys())}. "
-                f"This indicates a data loading issue."
-            )
-        
-        if ModalityType.RADAR not in modality_data:
-            raise ValueError(
-                f"RADAR modality missing from input data. "
-                f"Available modalities: {list(modality_data.keys())}. "
-                f"This indicates a data loading issue."
-            )
-
-        # Encode data
-        encoding_results = self.encode(modality_data, return_sequences=False)
-
-        # Extract features
-        radar_features = encoding_results[ModalityType.RADAR].features
-        text_features = encoding_results[ModalityType.TEXT].features
-        
-        # Validate feature shapes - must be 2D [batch_size, embed_dim]
-        if len(radar_features.shape) != 2:
-            raise ValueError(
-                f"Expected radar_features to be 2D [batch_size, embed_dim], "
-                f"got shape {radar_features.shape}. "
-                f"This indicates an encoder configuration issue. "
-                f"Make sure return_sequences=False is properly handled in RadarEncoder."
-            )
-        
-        if len(text_features.shape) != 2:
-            raise ValueError(
-                f"Expected text_features to be 2D [batch_size, embed_dim], "
-                f"got shape {text_features.shape}. "
-                f"This indicates an encoder configuration issue. "
-                f"Make sure return_sequences=False is properly handled in TextEncoder."
-            )
-
-        # Use new method to compute losses
-        return self._compute_losses_from_features(radar_features, text_features, encoding_results)
 
     def training_step(self, batch, batch_idx):
         """Lightning training step - using unified forward method."""
