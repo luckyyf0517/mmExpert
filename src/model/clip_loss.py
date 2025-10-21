@@ -280,7 +280,15 @@ class SigLipLoss(nn.Module):
         return labels
 
     def get_logits(self, image_features, text_features, logit_scale, logit_bias=None):
-        logits = logit_scale * image_features @ text_features.T
+        # For SigLIP, logit_scale is typically in log space
+        # Apply exp to get the actual scale if needed
+        if isinstance(logit_scale, torch.nn.Parameter) and logit_scale.requires_grad:
+            # This is likely a learnable parameter (SigLIP case)
+            actual_scale = torch.exp(logit_scale) if logit_scale.item() > 0 else logit_scale
+        else:
+            actual_scale = logit_scale
+
+        logits = actual_scale * image_features @ text_features.T
         if logit_bias is not None:
             logits += logit_bias
         return logits

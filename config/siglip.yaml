@@ -1,0 +1,71 @@
+# SigLIP configuration for radar data with adaptive patch sizing
+log_dir: 'log/'
+strategy: 'ddp'
+
+data_cfg:
+  target: src.data_interface.HumanDInterface
+  params:
+    cfg:
+      # Dataset splits
+      train_split: ['dataset/HumanML3D/_split/train.json']
+      train_ratio: [1.0]
+      val_split: ['dataset/HumanML3D/_split/val.json']
+      val_ratio: [1.0]
+      test_split: ['dataset/HumanML3D/_split/test.json']
+      test_ratio: [1.0]
+
+      # Radar data configuration
+      opt:
+        max_motion_length: 496      # Full padded length
+        min_motion_len: 96          # Minimum motion length
+        max_text_len: 20            # Maximum text caption length
+        unit_length: 16             # Unit length for processing
+        log_norm: true              # Apply log normalization
+        radar_views: 'all'          # Radar views to use: 'all', 'doppler_only', 'range_only', 'azimuth_only'
+
+        # Disabled parameters (kept for compatibility but not used)
+        udoppler_postfix: ''  # Legacy parameter
+        random_rotate: false
+        random_scale: false
+        thresholding: false
+
+      batch_size: 64                # Batch size for training
+      num_workers: 1                # Number of data loading workers
+      sample_ratio: 1
+
+model_cfg:
+  target: src.model.clip.CLIP
+  params:
+    # Training parameters
+    max_epochs: 200
+    learning_rate: 1.0e-04
+    temperature: 0.07              # Temperature parameter (used for non-SigLIP, kept for compatibility)
+    use_siglip: true              # Enable SigLIP loss instead of standard CLIP loss
+
+    # Radar encoder configuration
+    encoder_cfg:
+      model_name: 'vit_base_patch16_clip_224.openai'  # ViT model
+      embed_dim: 256                               # Feature embedding dimension (must match transformer_width)
+      fusion_method: 'add'                         # Fusion method: 'concat', 'add', or 'attention'
+      radar_views: 'all'                          # Radar views to use: 'all', 'doppler_only', 'range_only', 'azimuth_only'
+
+      # Radar signal resolutions
+      range_resolution: [256, 496]    # Range-time spectrum dimensions
+      doppler_resolution: [128, 496]  # Doppler-time spectrum dimensions
+      azimuth_resolution: [128, 496]  # Azimuth-time spectrum dimensions
+
+      pretrained: false               # Don't use pretrained weights for custom patch sizes
+      adaptive_patch_size: true       # Enable adaptive patch sizing (32x16, 16x16, 16x16)
+
+    # Text encoder configuration
+    text_cfg:
+      model_name: 'sentence-transformers/paraphrase-MiniLM-L6-v2'
+      embed_dim: 384
+      text_pooling: 'pooler'
+      unfreeze_last_layer_num: 0
+
+    # Transformer configuration for processing fused radar features
+    context_length: 249  # Should match radar encoder sequence length (31*8=248) + 1 EOT token
+    transformer_width: 256
+    transformer_heads: 8
+    transformer_layers: 1
