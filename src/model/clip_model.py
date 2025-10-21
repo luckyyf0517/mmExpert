@@ -10,6 +10,7 @@ from .clip_transformer import Transformer, build_attention_mask, LayerNorm
 from .clip_text_encoder import TextEncoder
 from .clip_radar_encoder import RadarEncoder
 from .clip_loss import create_loss
+from .sequence_similarity import SequenceLoss, SequenceSimilarity
 
 # Suppress specific warning from transformers
 import warnings
@@ -34,7 +35,11 @@ class CLIP(pl.LightningModule):
                  temperature: float,
                  use_siglip: bool = False,
                  learning_rate: float = 1.0e-04,
-                 max_epochs: int = 50):
+                 max_epochs: int = 50,
+                 # sequence similarity cfg
+                 use_sequence_similarity: bool = False,
+                 sequence_similarity_type: str = "combined",
+                 sequence_similarity_weight: float = 0.5):
         super().__init__()
 
         # Radar encoder
@@ -84,6 +89,18 @@ class CLIP(pl.LightningModule):
         })
         self.loss_fn = create_loss(loss_args)
 
+        # Sequence similarity configuration
+        self.use_sequence_similarity = use_sequence_similarity
+        self.sequence_similarity_weight = sequence_similarity_weight
+
+        if self.use_sequence_similarity:
+            self.sequence_loss_fn = SequenceLoss(
+                embed_dim=encoder_embed_dim,
+                similarity_type=sequence_similarity_type,
+                temperature=temperature,
+                use_siglip=use_siglip
+            )
+
         self.learning_rate = learning_rate
         self.max_epochs = max_epochs
 
@@ -114,7 +131,7 @@ class CLIP(pl.LightningModule):
         return next(self.radar_encoder.parameters()).dtype
 
 
-    def encode_radar(self, range_data, doppler_data, azimuth_data):
+    def encode_radar(self, range_data, doppler_data, azimuth_data, return_sequence=False):
         """
         Encode radar data using parallel encoders.
 
@@ -122,9 +139,10 @@ class CLIP(pl.LightningModule):
             range_data: [b, 256, T] range-time spectrum
             doppler_data: [b, 128, T] doppler-time spectrum
             azimuth_data: [b, 128, T] azimuth-time spectrum
+            return_sequence: If True, returns full sequence; otherwise returns pooled representation
 
         Returns:
-            features: [b, embed_dim] encoded radar features
+            features: [b, embed_dim] if return_sequence=False, or [b, seq_len, embed_dim] if True
         """
         x = self.radar_encoder(range_data, doppler_data, azimuth_data)  # [b, n, embed_dim]
 
@@ -132,31 +150,45 @@ class CLIP(pl.LightningModule):
         x = torch.cat([x, self.eot_token.to(x.dtype) + torch.zeros_like(x[:, :1, :])], dim=1)
         x = x + self.positional_embedding.to(x.dtype)
         x = self.transformer(x)
-        x = self.ln_final(x[:, -1, :])  # Use EOT token representation
+        x = self.ln_final(x)  # Apply layer norm to entire sequence
 
+        if return_sequence:
+            # Return full sequence without EOT token for sequence-level processing
+            return x[:, :-1, :]  # [b, seq_len, embed_dim]
+        else:
+            # Return EOT token representation for compatibility
+            return x[:, -1, :]  # [b, embed_dim]
+
+    def encode_text(self, text, device='cuda', return_sequence=False):
+        x = self.text_encoder.encode(text, device=device, return_sequence=return_sequence)
+        if return_sequence:
+            # Apply projection to each token in the sequence
+            x = self.text_projection(x)  # [b, seq_len, embed_dim]
+        else:
+            # Apply projection to pooled representation
+            x = self.text_projection(x)
         return x
 
-    def encode_text(self, text, device='cuda'):
-        x = self.text_encoder.encode(text, device=device)
-        x = self.text_projection(x)
-        return x
-
-    def forward(self, radar_data, text):
+    def forward(self, radar_data, text, return_sequences=False):
         """
         Forward pass for CLIP with radar data.
 
         Args:
             radar_data: Dict with keys 'range_time', 'doppler_time', 'azimuth_time'
             text: List of text captions
+            return_sequences: If True, also returns sequence-level features
 
         Returns:
             radar_features: [b, embed_dim] normalized radar features
             text_features: [b, embed_dim] normalized text features
+            radar_seq: [b, seq_len, embed_dim] radar sequence features (if return_sequences=True)
+            text_seq: [b, seq_len, embed_dim] text sequence features (if return_sequences=True)
         """
         radar_features = self.encode_radar(
             radar_data['range_time'],
             radar_data['doppler_time'],
-            radar_data['azimuth_time']
+            radar_data['azimuth_time'],
+            return_sequence=return_sequences
         )
 
         # Get device from the first non-None radar data
@@ -170,12 +202,91 @@ class CLIP(pl.LightningModule):
         else:
             raise ValueError("All radar data is None, cannot determine device")
 
-        text_features = self.encode_text(text, device=device)
+        text_features = self.encode_text(text, device=device, return_sequence=return_sequences)
 
-        # Improved feature normalization with numerical stability
-        radar_features = self._normalize_features(radar_features, feature_type="radar")
-        text_features = self._normalize_features(text_features, feature_type="text")
-        return radar_features, text_features
+        if return_sequences:
+            radar_seq = radar_features
+            text_seq = text_features
+
+            # Also compute pooled features for compatibility with existing loss
+            radar_pooled = radar_seq.mean(dim=1)
+            text_pooled = text_seq.mean(dim=1)
+
+            radar_pooled = self._normalize_features(radar_pooled, feature_type="radar")
+            text_pooled = self._normalize_features(text_pooled, feature_type="text")
+
+            return radar_pooled, text_pooled, radar_seq, text_seq
+        else:
+            # Improved feature normalization with numerical stability
+            radar_features = self._normalize_features(radar_features, feature_type="radar")
+            text_features = self._normalize_features(text_features, feature_type="text")
+            return radar_features, text_features
+
+    def encode_sequences(self, radar_data, text):
+        """
+        Encode radar and text data to sequences.
+
+        Args:
+            radar_data: Dict with keys 'range_time', 'doppler_time', 'azimuth_time'
+            text: List of text captions
+
+        Returns:
+            radar_seq: [b, seq_len, embed_dim] radar sequence features
+            text_seq: [b, seq_len, embed_dim] text sequence features
+        """
+        radar_seq = self.encode_radar(
+            radar_data['range_time'],
+            radar_data['doppler_time'],
+            radar_data['azimuth_time'],
+            return_sequence=True
+        )
+
+        # Get device from the first non-None radar data
+        device = None
+        if radar_data['range_time'] is not None:
+            device = radar_data['range_time'].device
+        elif radar_data['doppler_time'] is not None:
+            device = radar_data['doppler_time'].device
+        elif radar_data['azimuth_time'] is not None:
+            device = radar_data['azimuth_time'].device
+        else:
+            raise ValueError("All radar data is None, cannot determine device")
+
+        text_seq = self.encode_text(text, device=device, return_sequence=True)
+
+        # Normalize sequences
+        radar_seq = self._normalize_sequence_features(radar_seq, feature_type="radar")
+        text_seq = self._normalize_sequence_features(text_seq, feature_type="text")
+
+        return radar_seq, text_seq
+
+    def _normalize_sequence_features(self, features: torch.Tensor, feature_type: str = "generic", eps: float = 1e-8) -> torch.Tensor:
+        """
+        Normalize sequence features.
+
+        Args:
+            features: Input features [b, seq_len, embed_dim]
+            feature_type: Type of features for debugging
+            eps: Small constant for numerical stability
+
+        Returns:
+            Normalized features [b, seq_len, embed_dim]
+        """
+        if features is None:
+            raise ValueError(f"Cannot normalize None features for {feature_type}")
+
+        # Ensure features are 3D [batch_size, seq_len, feature_dim]
+        if features.dim() != 3:
+            raise ValueError(f"Expected 3D sequence features for {feature_type}, got {features.dim()}D")
+
+        # Compute L2 norm for each sequence element
+        features_norm = torch.norm(features, p=2, dim=-1, keepdim=True)
+        features_norm = torch.clamp(features_norm, min=eps)  # Prevent division by zero
+
+        # L2 normalization
+        normalized_features = features / features_norm
+
+        return normalized_features
 
     def _normalize_features(self, features: torch.Tensor, feature_type: str = "generic", eps: float = 1e-8) -> torch.Tensor:
         """
@@ -228,11 +339,28 @@ class CLIP(pl.LightningModule):
     def compute_loss(self, batch):
         radar_features = batch['radar_features'] if 'radar_features' in batch else batch['image_features']
         text_features = batch['text_features']
+
+        # Standard CLIP loss
         if not self.use_siglip:
             loss_clip = self.loss_fn(radar_features, text_features, logit_scale=self.logit_scale)
         else:
             loss_clip = self.loss_fn(radar_features, text_features, logit_scale=self.logit_scale, logit_bias=self.logit_bias)
-        return {'loss_clip': loss_clip}
+
+        loss_dict = {'loss_clip': loss_clip}
+
+        # Add sequence similarity loss if enabled
+        if self.use_sequence_similarity and 'radar_seq' in batch and 'text_seq' in batch:
+            if not self.use_siglip:
+                loss_seq = self.sequence_loss_fn(batch['radar_seq'], batch['text_seq'], logit_scale=self.logit_scale)
+            else:
+                loss_seq = self.sequence_loss_fn(batch['radar_seq'], batch['text_seq'], logit_scale=self.logit_scale, logit_bias=self.logit_bias)
+
+            # Weight the sequence loss
+            loss_seq = self.sequence_similarity_weight * loss_seq
+            loss_dict['loss_seq'] = loss_seq
+            loss_dict['loss_total'] = loss_clip + loss_seq
+
+        return loss_dict
 
     def shared_step(self, batch, batch_idx, phase='train'):
         # Determine batch size from non-None radar data
@@ -252,7 +380,16 @@ class CLIP(pl.LightningModule):
             'azimuth_time': batch['input_wave_azimuth']   # Could be None
         }
         text = batch['caption']
-        radar_features, text_features = self.forward(radar_data, text)
+
+        if self.use_sequence_similarity:
+            # Get both pooled and sequence features
+            radar_features, text_features, radar_seq, text_seq = self.forward(radar_data, text, return_sequences=True)
+            batch['radar_seq'] = radar_seq
+            batch['text_seq'] = text_seq
+        else:
+            # Get only pooled features
+            radar_features, text_features = self.forward(radar_data, text, return_sequences=False)
+
         batch['radar_features'] = radar_features
         batch['image_features'] = radar_features  # For compatibility with loss computation
         batch['text_features'] = text_features
@@ -268,7 +405,14 @@ class CLIP(pl.LightningModule):
         self.log_loss(loss_dict, phase='train')
 
         # Display loss in progress bar with more details
-        self.log('train_loss', loss_dict['loss_clip'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
+        if 'loss_total' in loss_dict:
+            # Use total loss when sequence similarity is enabled
+            self.log('train_loss', loss_dict['loss_total'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
+            return loss_dict['loss_total']
+        else:
+            # Use standard CLIP loss when sequence similarity is disabled
+            self.log('train_loss', loss_dict['loss_clip'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
+            return loss_dict['loss_clip']
 
         # Also log learning rate for monitoring (safely)
         try:
@@ -278,27 +422,36 @@ class CLIP(pl.LightningModule):
         except (AttributeError, IndexError):
             pass  # Skip if trainer or optimizers not available
 
-        return loss_dict['loss_clip']
-
     def validation_step(self, batch, batch_idx):
         batch = self.shared_step(batch, batch_idx, phase='valid')
         loss_dict = self.compute_loss(batch)
         self.log_loss(loss_dict, phase='valid')
 
         # Display loss in progress bar
-        self.log('val_loss', loss_dict['loss_clip'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
-
-        return loss_dict['loss_clip']
+        if 'loss_total' in loss_dict:
+            # Use total loss when sequence similarity is enabled
+            self.log('val_loss', loss_dict['loss_total'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
+            return loss_dict['loss_total']
+        else:
+            # Use standard CLIP loss when sequence similarity is disabled
+            self.log('val_loss', loss_dict['loss_clip'], prog_bar=True, logger=False, on_step=True, on_epoch=False)
+            return loss_dict['loss_clip']
 
     def configure_optimizers(self):
         lr = self.learning_rate
 
-        opt = torch.optim.AdamW([
+        param_groups = [
             {'params': self.text_encoder.parameters(), 'lr': lr / 2},
             {'params': self.text_projection.parameters(), 'lr': lr},
             {'params': self.radar_encoder.parameters(), 'lr': lr},
             {'params': self.transformer.parameters(), 'lr': lr},
-        ], betas=(0.5, 0.9), weight_decay=0.01)
+        ]
+
+        # Add sequence similarity parameters if enabled
+        if self.use_sequence_similarity:
+            param_groups.append({'params': self.sequence_loss_fn.parameters(), 'lr': lr})
+
+        opt = torch.optim.AdamW(param_groups, betas=(0.5, 0.9), weight_decay=0.01)
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.max_epochs, eta_min=0)
         return [opt], [scheduler]

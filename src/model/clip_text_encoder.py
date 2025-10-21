@@ -70,14 +70,20 @@ class TextEncoder(nn.Module):
 
             param.requires_grad = unfreeze_param
 
-    def encode(self, text, device='cuda'):
+    def encode(self, text, device='cuda', return_sequence=False):
         inputs = self.tokenizer(text, return_tensors='pt', padding=True, truncation=True)
         inputs = {k: v.to(device) for k, v in inputs.items()}
         outputs = self.text_encoder(**inputs)
-        if self.text_pooling == 'mean':
-            out = outputs.last_hidden_state.mean(dim=1)
-        elif self.text_pooling == 'pooler':
-            out = outputs.pooler_output
-        elif self.text_pooling == 'max':
-            out = outputs.last_hidden_state.max(dim=1)[0]
-        return out
+
+        if return_sequence:
+            # Return full sequence for sequence-level processing
+            return outputs.last_hidden_state  # [b, seq_len, text_embed_dim]
+        else:
+            # Apply pooling as before for compatibility
+            if self.text_pooling == 'mean':
+                out = outputs.last_hidden_state.mean(dim=1)
+            elif self.text_pooling == 'pooler':
+                out = outputs.pooler_output
+            elif self.text_pooling == 'max':
+                out = outputs.last_hidden_state.max(dim=1)[0]
+            return out
