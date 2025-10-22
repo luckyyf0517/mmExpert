@@ -121,7 +121,7 @@ class SequenceSimilarity(nn.Module):
 
     def local_similarity(self, radar_seq, text_seq):
         """
-        Compute local similarity using sliding windows.
+        Compute local similarity using sliding windows with optimized chunked vectorization.
 
         Args:
             radar_seq: [b, radar_len, embed_dim]
@@ -131,8 +131,6 @@ class SequenceSimilarity(nn.Module):
             similarity: [b, b]
         """
         batch_size = radar_seq.size(0)
-        radar_len = radar_seq.size(1)
-        text_len = text_seq.size(1)
 
         # Extract sliding windows
         radar_windows = self.extract_windows(radar_seq, self.window_size)  # [b, num_windows, window_size, embed_dim]
@@ -150,35 +148,104 @@ class SequenceSimilarity(nn.Module):
         radar_pooled = F.normalize(radar_pooled, dim=-1)
         text_pooled = F.normalize(text_pooled, dim=-1)
 
-        # Compute pairwise window similarities
-        # radar_pooled: [b, n_radar_windows, embed_dim]
-        # text_pooled: [b, n_text_windows, embed_dim]
+        # Use optimized chunked vectorization
+        return self._local_similarity_optimized(radar_pooled, text_pooled)
 
-        # Compute similarities between all window pairs for each batch
-        # We need to create cross-modal similarity matrix between batch items
-        local_similarities = []
+    def _local_similarity_optimized(self, radar_pooled, text_pooled, chunk_size=16):
+        """
+        Optimized local similarity computation using chunked vectorization.
 
-        for i in range(batch_size):
-            # For each batch item, compute similarity with all other batch items
-            batch_similarities = []
-            for j in range(batch_size):
-                # Compute window similarity between item i and item j
-                radar_windows = radar_pooled[i]  # [n_radar_windows, embed_dim]
-                text_windows = text_pooled[j]    # [n_text_windows, embed_dim]
+        Args:
+            radar_pooled: [b, n_radar_windows, embed_dim]
+            text_pooled: [b, n_text_windows, embed_dim]
+            chunk_size: Size of chunks for memory-efficient computation
 
-                # Compute similarity matrix between windows
-                window_sim_matrix = torch.matmul(radar_windows, text_windows.T) / self.temperature  # [n_radar, n_text]
+        Returns:
+            similarity: [b, b] similarity matrix
+        """
+        batch_size = radar_pooled.size(0)
 
-                # Pool across windows to get sequence-level similarity
-                similarity_score = window_sim_matrix.max()
-                batch_similarities.append(similarity_score)
+        # For small batches, use full vectorization
+        if batch_size <= chunk_size:
+            return self._compute_full_vectorized(radar_pooled, text_pooled)
+        else:
+            return self._compute_chunked(radar_pooled, text_pooled, chunk_size)
 
-            local_similarities.append(torch.stack(batch_similarities))
+    def _compute_full_vectorized(self, radar_pooled, text_pooled):
+        """
+        Fully vectorized computation for small batches.
 
-        # Create similarity matrix
-        similarity = torch.stack(local_similarities)  # [b, b]
+        Args:
+            radar_pooled: [b, n_radar, d]
+            text_pooled: [b, n_text, d]
+
+        Returns:
+            similarity: [b, b]
+        """
+        batch_size = radar_pooled.size(0)
+        n_radar = radar_pooled.size(1)
+        n_text = text_pooled.size(1)
+
+        # Expand dimensions for broadcasting
+        # radar_expanded: [b, 1, n_radar, d]
+        # text_expanded: [1, b, n_text, d]
+        radar_expanded = radar_pooled.unsqueeze(1)  # [b, 1, n_radar, d]
+        text_expanded = text_pooled.unsqueeze(0)    # [1, b, n_text, d]
+
+        # Compute all pairwise similarities between radar and text windows
+        # result: [b, b, n_radar, n_text]
+        all_similarities = torch.matmul(radar_expanded, text_expanded.transpose(-2, -1)) / self.temperature
+
+        # Max pooling over window dimensions to get sequence-level similarity
+        # First max over text windows, then over radar windows
+        similarity = all_similarities.max(dim=-1)[0].max(dim=-1)[0]  # [b, b]
 
         return similarity
+
+    def _compute_chunked(self, radar_pooled, text_pooled, chunk_size):
+        """
+        Chunked computation for large batches to balance memory and speed.
+
+        Args:
+            radar_pooled: [b, n_radar, d]
+            text_pooled: [b, n_text, d]
+            chunk_size: Size of computation chunks
+
+        Returns:
+            similarity: [b, b]
+        """
+        batch_size = radar_pooled.size(0)
+        device = radar_pooled.device
+
+        # Initialize similarity matrix
+        similarity_matrix = torch.zeros(batch_size, batch_size, device=device)
+
+        # Process in chunks
+        for i_start in range(0, batch_size, chunk_size):
+            i_end = min(i_start + chunk_size, batch_size)
+
+            for j_start in range(0, batch_size, chunk_size):
+                j_end = min(j_start + chunk_size, batch_size)
+
+                # Extract chunks
+                radar_chunk = radar_pooled[i_start:i_end]  # [chunk_i, n_radar, d]
+                text_chunk = text_pooled[j_start:j_end]    # [chunk_j, n_text, d]
+
+                # Expand for broadcasting: similar to full vectorized but with chunks
+                radar_expanded = radar_chunk.unsqueeze(1)  # [chunk_i, 1, n_radar, d]
+                text_expanded = text_chunk.unsqueeze(0)    # [1, chunk_j, n_text, d]
+
+                # Compute chunk similarities
+                chunk_similarities = torch.matmul(radar_expanded, text_expanded.transpose(-2, -1)) / self.temperature
+                # chunk_similarities: [chunk_i, chunk_j, n_radar, n_text]
+
+                # Max pool to get sequence-level similarity
+                chunk_result = chunk_similarities.max(dim=-1)[0].max(dim=-1)[0]  # [chunk_i, chunk_j]
+
+                # Store in result matrix
+                similarity_matrix[i_start:i_end, j_start:j_end] = chunk_result
+
+        return similarity_matrix
 
     def attention_similarity(self, radar_seq, text_seq):
         """
