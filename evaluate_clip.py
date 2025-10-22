@@ -41,7 +41,8 @@ class CLIPEvaluator:
 
         # Handle version path option
         if self.version_path is not None:
-            self.model_path, self.config_path = self.discover_from_version(self.version_path)
+            self.model_path, self.config_dir = self.discover_from_version(self.version_path)
+            self.config_path = None  # Will be determined by config discovery
 
         # Auto-discover config if not provided
         if self.config_path is None:
@@ -88,39 +89,57 @@ class CLIPEvaluator:
             model_path = os.path.join(checkpoints_dir, ckpt_files[-1])
             print(f"✅ Found checkpoint: {model_path}")
 
-        # Find config directory
+        # Check for config directory in multiple locations
         version_name = os.path.basename(version_path)
+
+        # Priority 1: config directory inside version (new format)
+        config_dir = os.path.join(version_path, 'config')
+        if os.path.exists(config_dir) and os.path.isdir(config_dir):
+            print(f"✅ Found config directory in version: {config_dir}")
+            return model_path, config_dir
+
+        # Priority 2: config/version_name (old format)
         config_dir = os.path.join('config', version_name)
-        if not os.path.exists(config_dir):
-            raise FileNotFoundError(f"Config directory not found: {config_dir}")
+        if os.path.exists(config_dir) and os.path.isdir(config_dir):
+            print(f"✅ Found config directory in config/: {config_dir}")
+            return model_path, config_dir
 
-        print(f"✅ Using config directory: {config_dir}")
+        # Priority 3: Check for model_config.yaml directly in version directory
+        model_config_in_version = os.path.join(version_path, 'model_config.yaml')
+        if os.path.exists(model_config_in_version):
+            print(f"✅ Found model_config.yaml in version directory: {version_path}")
+            return model_path, version_path
 
-        # Let the existing discover_config_path handle the config merging
-        return model_path, None  # config_path will be auto-discovered
+        raise FileNotFoundError(f"Config directory not found in any expected location for version: {version_name}")
 
     def discover_config_path(self):
         """Auto-discover and merge config files based on checkpoint location"""
-        model_dir = os.path.dirname(self.model_path)
-
-        # Extract version name from path to find config directory
-        # Path could be: log/version/checkpoints/model.ckpt or log/version/model.ckpt (old format)
-        if os.path.basename(model_dir) == 'checkpoints':
-            # New format: log/version/checkpoints/model.ckpt
-            version_dir = os.path.dirname(model_dir)
-            version_name = os.path.basename(version_dir)
-            # First try: log/version/config/ (newest format)
-            config_dir = os.path.join(version_dir, 'config')
-            # Fallback: config/version/ (old format)
-            if not os.path.exists(config_dir):
-                config_dir = os.path.join('config', version_name)
+        # If we have a config_dir from version discovery, use it
+        if hasattr(self, 'config_dir') and self.config_dir is not None:
+            config_dir = self.config_dir
+            print(f"✅ Using pre-discovered config directory: {config_dir}")
         else:
-            # Old format: log/version/model.ckpt
-            version_name = os.path.basename(model_dir)
-            config_dir = os.path.join('config', version_name)
-            # Also check the same directory as the checkpoint for backwards compatibility
-            if not os.path.exists(config_dir):
-                config_dir = model_dir
+            # Fall back to auto-discovery based on checkpoint location
+            model_dir = os.path.dirname(self.model_path)
+
+            # Extract version name from path to find config directory
+            # Path could be: log/version/checkpoints/model.ckpt or log/version/model.ckpt (old format)
+            if os.path.basename(model_dir) == 'checkpoints':
+                # New format: log/version/checkpoints/model.ckpt
+                version_dir = os.path.dirname(model_dir)
+                version_name = os.path.basename(version_dir)
+                # First try: log/version/config/ (newest format)
+                config_dir = os.path.join(version_dir, 'config')
+                # Fallback: config/version/ (old format)
+                if not os.path.exists(config_dir):
+                    config_dir = os.path.join('config', version_name)
+            else:
+                # Old format: log/version/model.ckpt
+                version_name = os.path.basename(model_dir)
+                config_dir = os.path.join('config', version_name)
+                # Also check the same directory as the checkpoint for backwards compatibility
+                if not os.path.exists(config_dir):
+                    config_dir = model_dir
 
         # Look for config files in the config directory first (new format)
         model_config = os.path.join(config_dir, 'model_config.yaml')

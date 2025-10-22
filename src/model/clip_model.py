@@ -17,9 +17,8 @@ from torchmetrics import Metric
 from ..core.base import BaseModel, ModalityData, ModalityType, EncodingResult
 from ..core.config import ModelConfig
 from ..core.registry import register_model
-from ..core.factory import auto_factory
+from ..core.factory import auto_factory, create_encoder
 from ..core.injection import injectable, ServiceLifetime
-from ..encoders.radar_encoder import RadarEncoder
 from ..encoders.text_encoder import TextEncoder
 from ..model.clip_loss import ClipLoss, SigLipLoss, create_loss
 from ..model.sequence_similarity import SequenceSimilarity
@@ -172,7 +171,22 @@ class CLIPModel(pl.LightningModule):
         # Create radar encoder
         if "radar" in encoder_configs:
             radar_config = encoder_configs["radar"]
-            self.radar_encoder = RadarEncoder(**radar_config)
+            # Support encoder_type specification, default to temporal encoder
+            encoder_type = radar_config.get("encoder_type", "radar_encoder_temporal")
+
+            # For now, directly instantiate the encoder to avoid factory configuration issues
+            # TODO: Fix factory system to properly handle encoder configurations
+            if encoder_type == "radar_encoder_temporal" or encoder_type == "radar_encoder":
+                from ..encoders.radar_encoder_temporal import RadarEncoderTemporal
+                self.radar_encoder = RadarEncoderTemporal(**radar_config)
+            else:
+                # Fallback to factory system for other encoder types
+                factory_config = {
+                    "component_type": encoder_type,
+                    "override_params": radar_config
+                }
+                self.radar_encoder = create_encoder(encoder_type, factory_config)
+
             self.add_encoder(ModalityType.RADAR, self.radar_encoder)
 
         # Create text encoder

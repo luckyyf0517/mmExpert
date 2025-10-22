@@ -1,8 +1,9 @@
 """
-Refactored radar encoder using the new abstraction layer.
+Temporal radar encoder using the new abstraction layer.
 
-This module provides a clean, extensible radar encoder implementation
+This module provides a clean, extensible temporal radar encoder implementation
 that integrates with the mmExpert framework's core abstractions.
+Uses Conv1d layers for temporal processing of multi-view radar data.
 """
 
 import torch
@@ -17,19 +18,25 @@ from ..core.factory import auto_factory
 
 
 @register_encoder(
-    name="radar_encoder",
-    description="Radar encoder with multi-view processing",
-    tags=["radar", "multimodal", "encoder"]
+    name="radar_encoder_temporal",
+    description="Temporal radar encoder with multi-view processing using Conv1d",
+    tags=["radar", "multimodal", "encoder", "temporal"]
 )
-class RadarEncoder(BaseEncoder):
+@register_encoder(
+    name="radar_encoder",  # Backward compatibility alias
+    description="Radar encoder with multi-view processing (legacy alias)",
+    tags=["radar", "multimodal", "encoder", "legacy"]
+)
+class RadarEncoderTemporal(BaseEncoder):
     """
-    Enhanced radar encoder for processing mmWave radar data.
+    Enhanced temporal radar encoder for processing mmWave radar data.
 
     This encoder supports:
     - Multi-view radar processing (range-time, doppler-time, azimuth-time)
     - Configurable architecture
     - Sequence-level encoding
     - Flexible input handling
+    - Temporal feature extraction using Conv1d layers
     """
 
     def __init__(self,
@@ -41,7 +48,7 @@ class RadarEncoder(BaseEncoder):
                  use_positional_encoding: bool = False,
                  **kwargs):
         """
-        Initialize radar encoder.
+        Initialize temporal radar encoder.
 
         Args:
             embed_dim: Embedding dimension
@@ -54,7 +61,7 @@ class RadarEncoder(BaseEncoder):
             **kwargs: Additional parameters (ignored, for compatibility)
         """
         super().__init__(embed_dim=embed_dim, modality=ModalityType.RADAR)
-        
+
         self.use_positional_encoding = use_positional_encoding
 
         # Default input dimensions if not provided
@@ -102,7 +109,7 @@ class RadarEncoder(BaseEncoder):
         self._initialize_parameters()
 
     def _create_view_encoder(self, input_dim: int) -> nn.Module:
-        """Create encoder for a single radar view."""
+        """Create encoder for a single radar view using Conv1d layers."""
         return nn.Sequential(
             nn.Conv1d(input_dim, self.embed_dim // 2, kernel_size=3, padding=1),
             nn.ReLU(),
@@ -159,14 +166,14 @@ class RadarEncoder(BaseEncoder):
             positions = torch.arange(seq_len, device=features.device)
             pos_encoding = self.positional_encoding(positions).unsqueeze(0)
             features = features + pos_encoding
-            
+
         # Apply layer normalization and dropout
         features = self.layer_norm(features)
         features = self.dropout_layer(features)
 
         # Pool features
         pooled_features = features.mean(dim=1)
-        
+
         # Create encoding result
         if return_sequence and features.dim() == 3:
             # Return sequence features
@@ -284,10 +291,10 @@ class RadarEncoder(BaseEncoder):
             return result.features
 
 
-# Factory function for creating radar encoder
-def create_radar_encoder(config: EncoderConfig) -> RadarEncoder:
-    """Create radar encoder from configuration."""
-    return RadarEncoder(
+# Factory function for creating temporal radar encoder
+def create_radar_encoder_temporal(config: EncoderConfig) -> RadarEncoderTemporal:
+    """Create temporal radar encoder from configuration."""
+    return RadarEncoderTemporal(
         embed_dim=config.embed_dim,
         input_dims=config.get("input_dims"),
         dropout=config.dropout,
@@ -295,6 +302,12 @@ def create_radar_encoder(config: EncoderConfig) -> RadarEncoder:
         use_layer_norm=config.get("use_layer_norm", True),
         use_positional_encoding=config.get("use_positional_encoding", False)
     )
+
+
+# Legacy alias for backward compatibility
+def create_radar_encoder(config: EncoderConfig) -> RadarEncoderTemporal:
+    """Create radar encoder from configuration (legacy alias)."""
+    return create_radar_encoder_temporal(config)
 
 
 # Component is automatically registered via @register_encoder decorator

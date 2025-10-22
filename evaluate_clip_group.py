@@ -281,15 +281,13 @@ def main():
     parser = argparse.ArgumentParser(description='Evaluate multiple CLIP models in a group')
     parser.add_argument('--group_dir', type=str, required=True,
                         help='Path to group directory containing version folders (e.g., log/humanml3d_experiments-text-encoder)')
-    parser.add_argument('--output_path', type=str, default='/tmp/clip_group_evaluation_results.json',
-                        help='Path to save detailed evaluation results')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use for evaluation')
     parser.add_argument('--batch_size', type=int, default=None,
                         help='Override batch size for evaluation')
     parser.add_argument('--verbose', action='store_true',
                         help='Enable verbose output with detailed progress')
-
+    
     args = parser.parse_args()
 
     # Create group evaluator
@@ -307,7 +305,9 @@ def main():
     evaluator.format_results()
 
     # Save detailed results
-    evaluator.save_results(args.output_path)
+    output_dir = f'tmp/clip_group_evaluation_results/{args.group_dir.split("/")[-1]}.json'
+    os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+    evaluator.save_results(output_dir)
 
 
 if __name__ == "__main__":

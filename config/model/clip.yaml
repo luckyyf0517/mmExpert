@@ -9,6 +9,7 @@ params:
   # Encoder configurations
   encoder_configs:
     radar:
+      encoder_type: "radar_encoder_temporal"  # Type of radar encoder to use
       embed_dim: 256      # Feature embedding dimension
       dropout: 0.1        # Dropout rate
 

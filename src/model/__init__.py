@@ -1,6 +1,6 @@
 # Import the refactored components
 from .clip_model import CLIPModel as CLIP
-from ..encoders.radar_encoder import RadarEncoder
+from ..encoders.radar_encoder_temporal import RadarEncoderTemporal as RadarEncoder
 from ..encoders.text_encoder import TextEncoder
 from .clip_transformer import Transformer, LayerNorm, QuickGELU, ResidualAttentionBlock, build_attention_mask
 

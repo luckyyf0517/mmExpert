@@ -11,7 +11,7 @@
 基于新的抽象层架构，系统包含以下核心组件：
 
 - **CLIPModel**: 主模型类（位于 `src/model/clip_model.py`），整合所有组件
-- **RadarEncoder**: 雷达数据编码器（位于 `src/encoders/radar_encoder.py`）
+- **RadarEncoderTemporal**: 雷达数据编码器（位于 `src/encoders/radar_encoder_temporal.py`）
 - **TextEncoder**: 文本编码器（位于 `src/encoders/text_encoder.py`）
 - **ClipLoss/SigLipLoss**: 损失函数实现（位于 `src/model/clip_loss.py`）
 - **SequenceSimilarity**: 序列相似度计算（位于 `src/model/sequence_similarity.py`）
