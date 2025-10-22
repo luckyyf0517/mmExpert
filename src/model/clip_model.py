@@ -123,23 +123,6 @@ class CLIPModel(pl.LightningModule):
             'use_siglip', 'learning_rate', 'max_epochs', 'encoder_configs'
         )
 
-        # Use default configuration if none provided
-        if encoder_configs is None:
-            encoder_configs = {
-                "radar": {
-                    "embed_dim": embed_dim,
-                    "num_layers": 4,
-                    "num_heads": 8,
-                    "dropout": 0.1
-                },
-                "text": {
-                    "embed_dim": embed_dim,
-                    "model_name": "sentence-transformers/paraphrase-MiniLM-L6-v2",
-                    "max_length": 77,
-                    "pooling_strategy": "cls"
-                }
-            }
-
         # Initialize encoders storage for compatibility
         self._encoders = {}
         self._processors = {}
@@ -478,13 +461,10 @@ class CLIPModel(pl.LightningModule):
 
         # Data validation
         if radar_data is None:
-            self.print("Warning: No radar data found in batch, using dummy data")
-            radar_data = {"range_time": torch.zeros(batch_size, 256, 100),
-                         "doppler_time": torch.zeros(batch_size, 128, 100),
-                         "azimuth_time": torch.zeros(batch_size, 128, 100)}
+            raise ValueError("No radar data found in batch")
+        
         if text_data is None:
-            self.print("Warning: No text data found in batch, using dummy data")
-            text_data = ["dummy text"] * batch_size
+            raise ValueError("No text data found in batch")
 
         # ✅ Use unified forward method to compute loss
         losses = self.forward(radar_data, text_data, compute_loss=True)
@@ -542,13 +522,10 @@ class CLIPModel(pl.LightningModule):
 
         # Data validation
         if radar_data is None:
-            self.print("Warning: No radar data found in validation batch, using dummy data")
-            radar_data = {"range_time": torch.zeros(batch_size, 256, 100),
-                         "doppler_time": torch.zeros(batch_size, 128, 100),
-                         "azimuth_time": torch.zeros(batch_size, 128, 100)}
+            raise ValueError("No radar data found in validation batch")
+
         if text_data is None:
-            self.print("Warning: No text data found in validation batch, using dummy data")
-            text_data = ["dummy text"] * batch_size
+            raise ValueError("No text data found in validation batch")
 
         # ✅ Use unified forward method to compute loss
         losses = self.forward(radar_data, text_data, compute_loss=True)

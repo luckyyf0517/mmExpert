@@ -83,13 +83,28 @@ if __name__ == '__main__':
     
     # Extract model name only (basename without extension)
     model_name = os.path.splitext(os.path.basename(args.model_config))[0]
+    
+    # Extract dataset name from data config path
+    data_config_name = os.path.splitext(os.path.basename(args.data_config))[0]
+    
+    # Extract experiment folder name from model config path
+    config_path_parts = args.model_config.split('/')
+    exp_folder = None
+    for i, part in enumerate(config_path_parts):
+        if part.startswith('experiments-'):
+            exp_folder = part
+            break
+    
+    if exp_folder is None:
+        exp_folder = 'experiments'
 
     if args.version is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.version = f"{timestamp}_{model_name}"  # Put timestamp first for better sorting
 
-    # Create log directory structure (log_dir can include subdirectories like log/humanml3d_experiments-freeze-layers)
-    log_dir = os.path.join(args.log_dir, args.version)
+    # Create log directory structure: dataset_experiment-folder/model_version
+    exp_category = f"{data_config_name}_{exp_folder}"
+    log_dir = os.path.join(args.log_dir, exp_category, args.version)
     checkpoints_dir = os.path.join(log_dir, 'checkpoints')
     config_dir = os.path.join(log_dir, 'config')  # Config files now in log directory
 

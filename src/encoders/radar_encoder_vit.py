@@ -208,8 +208,10 @@ class RadarEncoderViT(BaseEncoder):
         total_views = len(input_dims)
         self.fusion_layer = nn.Linear(vit_embed_dim * total_views, embed_dim)
 
-        # Projection layer to handle sequence features
-        self.sequence_projection = nn.Linear(embed_dim, embed_dim)
+        # Projection layer to handle sequence features - only create if needed
+        # This prevents DDP unused parameter errors when sequence features are not used
+        self.sequence_projection = None
+        self._sequence_projection_enabled = False  # Track if projection is enabled
 
         # Layer normalization
         if use_layer_norm:
@@ -225,6 +227,18 @@ class RadarEncoderViT(BaseEncoder):
 
         # Initialize parameters
         self._initialize_parameters()
+
+    def _ensure_sequence_projection(self):
+        """Lazily create sequence projection layer when needed."""
+        if self.sequence_projection is None:
+            self.sequence_projection = nn.Linear(self.embed_dim, self.embed_dim)
+            self._sequence_projection_enabled = True
+
+            # Initialize the new layer
+            nn.init.xavier_uniform_(self.sequence_projection.weight)
+            if self.sequence_projection.bias is not None:
+                nn.init.constant_(self.sequence_projection.bias, 0)
+        return self.sequence_projection
 
     def _create_view_encoder(self, vit_model: str, patch_size: Tuple[int, int],
                            target_size: Tuple[int, int], freeze_backbone: bool,
@@ -279,7 +293,9 @@ class RadarEncoderViT(BaseEncoder):
 
         # Apply sequence projection if needed
         if return_sequence and features.dim() == 3:
-            sequence_features = self.sequence_projection(features)
+            # Lazily create sequence projection layer when needed
+            projection_layer = self._ensure_sequence_projection()
+            sequence_features = projection_layer(features)
         else:
             sequence_features = features
 

@@ -14,8 +14,9 @@ params:
       dropout: 0.1        # Dropout rate
 
     text:
-      model_name: 'sentence-transformers/paraphrase-MiniLM-L6-v2'
+      model_name: 'sentence-transformers/all-mpnet-base-v2'
       embed_dim: 256
       max_length: 77
       pooling_strategy: 'pooler'
-      freeze_backbone: true
+      freeze_backbone: false
+      unfreeze_last_layers: 3    # Train last 3 transformer layers + projection
