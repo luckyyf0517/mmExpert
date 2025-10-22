@@ -70,8 +70,8 @@ def parse_args():
     if args.test:
         assert args.resume_checkpoint is not None
 
-    args.rank = int(os.environ.get('RANK'))
-    args.world_size = int(os.environ.get('WORLD_SIZE'))
+    args.rank = int(os.environ.get('RANK', 0))
+    args.world_size = int(os.environ.get('WORLD_SIZE', 1))
     return args
 
 

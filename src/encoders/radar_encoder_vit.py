@@ -106,7 +106,10 @@ class ViewEncoder(nn.Module):
         features = self.vit(x)  # [batch_size, num_patches, embed_dim]
 
         # Standardize number of patches
-        if features.size(1) != self.max_sequence_length:
+        if features.dim() == 2:
+            # If ViT returns 2D tensor [batch_size, embed_dim], reshape to 3D
+            features = features.unsqueeze(1)  # [batch_size, 1, embed_dim]
+        elif features.size(1) != self.max_sequence_length:
             # Transpose for adaptive pooling
             features = features.transpose(1, 2)  # [batch_size, embed_dim, num_patches]
             features = self.adaptive_pool(features)  # [batch_size, embed_dim, target_patches]
