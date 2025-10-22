@@ -24,6 +24,15 @@ class FactoryConfig(BaseConfig):
     version: str = "latest"
     override_params: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self):
+        """Initialize after dataclass init."""
+        # Initialize BaseConfig's _config attribute
+        super().__init__(
+            component_type=self.component_type,
+            version=self.version,
+            override_params=self.override_params
+        )
+
     def _validate_config(self, config: Dict[str, Any]) -> None:
         if "component_type" not in config:
             raise ValueError("component_type is required")
