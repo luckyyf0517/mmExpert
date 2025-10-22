@@ -578,7 +578,7 @@ def main():
 
     parser.add_argument('--config_path', type=str, default=None,
                         help='Path to model configuration file (YAML format). If not specified, will auto-discover in checkpoint directory')
-    parser.add_argument('--output_path', type=str, default='clip_evaluation_results.json',
+    parser.add_argument('--output_path', type=str, default='tmp/clip_evaluation_results.json',
                         help='Path to save evaluation results')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use for evaluation')
