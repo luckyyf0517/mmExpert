@@ -241,14 +241,8 @@ class Text2DopplerDatasetV2():
         # Load radar data from NPZ file
         radar_data = load_radar_data(radar_path, self.opt)
         if radar_data is None:
-            # Create dummy data if loading fails
-            radar_data = {
-                'range_time': np.zeros((256, self.opt.max_motion_length), dtype=np.float32),
-                'doppler_time': np.zeros((128, self.opt.max_motion_length), dtype=np.float32),
-                'azimuth_time': np.zeros((128, self.opt.max_motion_length), dtype=np.float32),
-                'mask': np.ones((self.opt.max_motion_length,), dtype=np.float32),
-                'T': self.opt.max_motion_length
-            }
+            # Raise error if radar data loading fails instead of using dummy data
+            raise ValueError(f"Failed to load radar data from {radar_path}. Radar data file is missing or corrupted.")
         return self._create_item_dict(data_dict, radar_path, radar_data)
 
 
