@@ -709,7 +709,7 @@ opt:
   max_text_len: 20                # 文本描述的最大token数量
   unit_length: 16                 # 处理的基本单元长度
   log_norm: true                  # 对数归一化：log(1 + |x|)
-  radar_views: 'all'              # 可选：'all', 'doppler_only', 'range_only', 'azimuth_only'
+  radar_views: 'all'              # 可选：'all', 'doppler', 'range', 'azimuth'
 ```
 
 ### 5.6 编码器参数详解

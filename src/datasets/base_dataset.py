@@ -193,22 +193,22 @@ class Text2DopplerDatasetV2():
                 'input_wave_doppler': radar_data['doppler_time'],
                 'input_wave_azimuth': radar_data['azimuth_time'],
             })
-        elif radar_views == 'doppler_only':
+        elif radar_views == 'doppler':
             item_dict.update({
-                'input_wave_range': None,          # Not used in doppler_only mode
+                'input_wave_range': None,          # Not used in doppler mode
                 'input_wave_doppler': radar_data['doppler_time'],
-                'input_wave_azimuth': None,        # Not used in doppler_only mode
+                'input_wave_azimuth': None,        # Not used in doppler mode
             })
-        elif radar_views == 'range_only':
+        elif radar_views == 'range':
             item_dict.update({
                 'input_wave_range': radar_data['range_time'],
-                'input_wave_doppler': None,        # Not used in range_only mode
-                'input_wave_azimuth': None,        # Not used in range_only mode
+                'input_wave_doppler': None,        # Not used in range mode
+                'input_wave_azimuth': None,        # Not used in range mode
             })
-        elif radar_views == 'azimuth_only':
+        elif radar_views == 'azimuth':
             item_dict.update({
-                'input_wave_range': None,          # Not used in azimuth_only mode
-                'input_wave_doppler': None,        # Not used in azimuth_only mode
+                'input_wave_range': None,          # Not used in azimuth mode
+                'input_wave_doppler': None,        # Not used in azimuth mode
                 'input_wave_azimuth': radar_data['azimuth_time'],
             })
         else:

@@ -80,20 +80,27 @@ if __name__ == '__main__':
 
     # Load configurations using args
     cfg = load_config(None, args.data_config, args.model_config)
-    config_name = f"{args.data_config.replace('config/data/', '').replace('.yaml', '')}_{args.model_config.replace('config/model/', '').replace('.yaml', '')}"
+    
+    # Extract model name only (basename without extension)
+    model_name = os.path.splitext(os.path.basename(args.model_config))[0]
 
     if args.version is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.version = f"{config_name}_{timestamp}"
+        args.version = f"{timestamp}_{model_name}"  # Put timestamp first for better sorting
 
-    # Create log directory using args
+    # Create log directory structure (log_dir can include subdirectories like log/humanml3d_experiments-freeze-layers)
     log_dir = os.path.join(args.log_dir, args.version)
+    checkpoints_dir = os.path.join(log_dir, 'checkpoints')
+    config_dir = os.path.join(log_dir, 'config')  # Config files now in log directory
+
     os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    os.makedirs(config_dir, exist_ok=True)
 
     # Save config files for reference
     if args.data_config is not None and args.model_config is not None:
-        shutil.copy(args.data_config, os.path.join(log_dir, 'data_config.yaml'))
-        shutil.copy(args.model_config, os.path.join(log_dir, 'model_config.yaml'))
+        shutil.copy(args.data_config, os.path.join(config_dir, 'data_config.yaml'))
+        shutil.copy(args.model_config, os.path.join(config_dir, 'model_config.yaml'))
     else:
         raise ValueError("Data-config and model-config must be provided")
 
@@ -106,8 +113,9 @@ if __name__ == '__main__':
     # Set random seed
     set_seed(seed=args.seed, n_gpu=args.world_size)
 
-    # Print core configuration parameters
-    print_core_config(args, log_dir, cfg)
+    # Print core configuration parameters (only on rank 0)
+    if args.rank == 0:
+        print_core_config(args, log_dir, cfg)
 
     # Instantiate model
     model_cfg = cfg.model_cfg
@@ -121,11 +129,11 @@ if __name__ == '__main__':
 
     logger = SwanLabLogger(name=args.version, project='mmExpert')
     if not args.resume_checkpoint and args.rank == 0:
-        for log_file in glob.glob(os.path.join(log_dir, '*.ckpt')):
+        for log_file in glob.glob(os.path.join(checkpoints_dir, '*.ckpt')):
             os.remove(log_file)
 
     checkpoint_callback = ModelCheckpoint(
-        dirpath=log_dir,
+        dirpath=checkpoints_dir,
         monitor='valid/loss_clip',
         filename='epoch_{epoch:02d}_val_{valid/loss_clip:.4f}',
         save_top_k=10,

@@ -12,9 +12,9 @@ def print_core_config(args, log_dir, cfg):
         log_dir: Log directory path
         cfg: Configuration dictionary
     """
-    print("=" * 80)
+    print("=" * 50)
     print("[TRAINING CONFIGURATION]")
-    print("-" * 80)
+    print("-" * 50)
     print(f"[EXPERIMENT NAME]      : {args.version}")
     print(f"[LOG DIRECTORY]        : {log_dir}")
     print(f"[DISTRIBUTED STRATEGY] : {args.strategy}")
@@ -24,7 +24,7 @@ def print_core_config(args, log_dir, cfg):
     print(f"[MODEL CONFIG]         : {args.model_config}")
 
     print("\n[DATA CONFIGURATION]")
-    print("-" * 80)
+    print("-" * 50)
     print(f"[BATCH SIZE]           : {cfg.data_cfg.params.cfg.batch_size}")
     print(f"[NUM WORKERS]          : {cfg.data_cfg.params.cfg.num_workers}")
     print(f"[MAX MOTION LENGTH]    : {cfg.data_cfg.params.cfg.opt.max_motion_length}")
@@ -35,7 +35,7 @@ def print_core_config(args, log_dir, cfg):
     print(f"[RADAR VIEWS]          : {cfg.data_cfg.params.cfg.opt.radar_views}")
 
     print("\n[CLIP CORE CONFIGURATION]")
-    print("-" * 80)
+    print("-" * 50)
     print(f"[MAX EPOCHS]           : {cfg.model_cfg.params.max_epochs}")
     print(f"[LEARNING RATE]       : {cfg.model_cfg.params.learning_rate}")
     print(f"[TEMPERATURE]         : {cfg.model_cfg.params.temperature}")
@@ -57,7 +57,7 @@ def print_core_config(args, log_dir, cfg):
         print(f"[MODEL TYPE]           : CLIP")
 
     print("\n[TEXT ENCODER CONFIGURATION]")
-    print("-" * 80)
+    print("-" * 50)
 
     # Extract text encoder configuration based on model type
     if cfg.model_cfg.params.get('use_siglip', False):
@@ -78,7 +78,7 @@ def print_core_config(args, log_dir, cfg):
             print(f"[FREEZE BACKBONE]      : {text_cfg.freeze_backbone}")
 
     print("\n[RADAR ENCODER CONFIGURATION]")
-    print("-" * 80)
+    print("-" * 50)
 
     if cfg.model_cfg.params.get('use_siglip', False):
         radar_cfg = cfg.model_cfg.params.encoder_cfg
@@ -93,5 +93,5 @@ def print_core_config(args, log_dir, cfg):
             print(f"[EMBED DIM]            : {radar_cfg.embed_dim}")
             print(f"[DROPOUT]             : {radar_cfg.dropout}")
 
-    print("=" * 80)
+    print("=" * 50)
     print()

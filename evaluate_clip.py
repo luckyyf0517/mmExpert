@@ -19,6 +19,7 @@ from sklearn.metrics import top_k_accuracy_score
 import argparse
 from pathlib import Path
 import yaml
+import glob
 
 # Add project root to path
 sys.path.append('/root/autodl-tmp/mmExpert')
@@ -30,12 +31,21 @@ from easydict import EasyDict as edict
 import pytorch_lightning as pl
 
 class CLIPEvaluator:
-    def __init__(self, model_path, config_path, device='cuda', debug=False, batch_size=None):
+    def __init__(self, model_path=None, config_path=None, version_path=None, device='cuda', debug=False, batch_size=None):
         self.device = device
         self.model_path = model_path
         self.config_path = config_path
+        self.version_path = version_path
         self.debug = debug
         self.override_batch_size = batch_size
+
+        # Handle version path option
+        if self.version_path is not None:
+            self.model_path, self.config_path = self.discover_from_version(self.version_path)
+
+        # Auto-discover config if not provided
+        if self.config_path is None:
+            self.config_path = self.discover_config_path()
 
         # Load model
         self.model = self.load_model()
@@ -44,6 +54,155 @@ class CLIPEvaluator:
 
         # Load test data
         self.test_dataloader = self.load_test_data()
+
+    def discover_from_version(self, version_path):
+        """Discover model and config paths from version directory"""
+        print(f"🔍 Discovering files from version path: {version_path}")
+
+        # Resolve version path - could be experiment name or full path
+        if not os.path.isabs(version_path) and '/' not in version_path:
+            # Assume it's just the experiment name
+            version_path = os.path.join('log/humanml3d_experiments-text-encoder', version_path)
+
+        if not os.path.exists(version_path):
+            raise FileNotFoundError(f"Version directory not found: {version_path}")
+
+        # Find checkpoint directory
+        checkpoints_dir = os.path.join(version_path, 'checkpoints')
+        if not os.path.exists(checkpoints_dir):
+            raise FileNotFoundError(f"Checkpoints directory not found: {checkpoints_dir}")
+
+        # Look for last.ckpt first, then fall back to other checkpoints
+        last_ckpt = os.path.join(checkpoints_dir, 'last.ckpt')
+        if os.path.exists(last_ckpt):
+            model_path = last_ckpt
+            print(f"✅ Found last checkpoint: {model_path}")
+        else:
+            # Find any checkpoint file
+            ckpt_files = [f for f in os.listdir(checkpoints_dir) if f.endswith('.ckpt')]
+            if not ckpt_files:
+                raise FileNotFoundError(f"No checkpoint files found in: {checkpoints_dir}")
+
+            # Sort by epoch number if possible, otherwise use the first one
+            ckpt_files.sort()
+            model_path = os.path.join(checkpoints_dir, ckpt_files[-1])
+            print(f"✅ Found checkpoint: {model_path}")
+
+        # Find config directory
+        version_name = os.path.basename(version_path)
+        config_dir = os.path.join('config', version_name)
+        if not os.path.exists(config_dir):
+            raise FileNotFoundError(f"Config directory not found: {config_dir}")
+
+        print(f"✅ Using config directory: {config_dir}")
+
+        # Let the existing discover_config_path handle the config merging
+        return model_path, None  # config_path will be auto-discovered
+
+    def discover_config_path(self):
+        """Auto-discover and merge config files based on checkpoint location"""
+        model_dir = os.path.dirname(self.model_path)
+
+        # Extract version name from path to find config directory
+        # Path could be: log/version/checkpoints/model.ckpt or log/version/model.ckpt (old format)
+        if os.path.basename(model_dir) == 'checkpoints':
+            # New format: log/version/checkpoints/model.ckpt
+            version_dir = os.path.dirname(model_dir)
+            version_name = os.path.basename(version_dir)
+            # First try: log/version/config/ (newest format)
+            config_dir = os.path.join(version_dir, 'config')
+            # Fallback: config/version/ (old format)
+            if not os.path.exists(config_dir):
+                config_dir = os.path.join('config', version_name)
+        else:
+            # Old format: log/version/model.ckpt
+            version_name = os.path.basename(model_dir)
+            config_dir = os.path.join('config', version_name)
+            # Also check the same directory as the checkpoint for backwards compatibility
+            if not os.path.exists(config_dir):
+                config_dir = model_dir
+
+        # Look for config files in the config directory first (new format)
+        model_config = os.path.join(config_dir, 'model_config.yaml')
+        data_config = os.path.join(config_dir, 'data_config.yaml')
+        single_config = os.path.join(config_dir, 'config.yaml')
+
+        # Check for different config patterns in config directory
+        has_model_config = os.path.exists(model_config)
+        has_data_config = os.path.exists(data_config)
+        has_single_config = os.path.exists(single_config)
+
+        # If not found in config directory, check the checkpoint directory (old format)
+        if not has_model_config and not has_data_config and not has_single_config:
+            model_config_old = os.path.join(model_dir, 'model_config.yaml')
+            data_config_old = os.path.join(model_dir, 'data_config.yaml')
+            single_config_old = os.path.join(model_dir, 'config.yaml')
+
+            has_model_config_old = os.path.exists(model_config_old)
+            has_data_config_old = os.path.exists(data_config_old)
+            has_single_config_old = os.path.exists(single_config_old)
+
+            if has_model_config_old or has_data_config_old or has_single_config_old:
+                # Use old format
+                model_config = model_config_old
+                data_config = data_config_old
+                single_config = single_config_old
+                has_model_config = has_model_config_old
+                has_data_config = has_data_config_old
+                has_single_config = has_single_config_old
+
+        if not has_model_config and not has_data_config and not has_single_config:
+            # Look for any yaml files in both directories
+            yaml_files = glob.glob(os.path.join(config_dir, '*.yaml'))
+            yaml_files.extend(glob.glob(os.path.join(model_dir, '*.yaml')))
+            if not yaml_files:
+                raise FileNotFoundError(
+                    f"No config files found in {config_dir} or {model_dir}. "
+                    f"Please specify --config_path manually."
+                )
+            return yaml_files[0]  # Return the first found
+
+        # If we have separate model and data configs, merge them
+        if has_model_config and has_data_config:
+            return self.merge_configs(model_config, data_config)
+        elif has_single_config:
+            print(f"Auto-discovered config: {single_config}")
+            return single_config
+        elif has_model_config:
+            print(f"Auto-discovered model config: {model_config}")
+            return model_config
+        else:  # has_data_config only
+            print(f"Auto-discovered data config: {data_config}")
+            return data_config
+
+    def merge_configs(self, model_config_path, data_config_path):
+        """Merge model and data configs into a single config for evaluation"""
+        import tempfile
+
+        # Load both configs
+        with open(model_config_path, 'r') as f:
+            model_config = yaml.safe_load(f)
+
+        with open(data_config_path, 'r') as f:
+            data_config = yaml.safe_load(f)
+
+        # Create merged config
+        merged_config = {
+            'model_cfg': model_config,
+            'data_cfg': data_config
+        }
+
+        # Create temporary file for merged config
+        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='_merged_config.yaml', delete=False)
+        yaml.dump(merged_config, temp_file, default_flow_style=False)
+        temp_file.close()
+
+        print(f"Auto-discovered and merged configs:")
+        print(f"  Model config: {model_config_path}")
+        print(f"  Data config: {data_config_path}")
+        print(f"  Merged config: {temp_file.name}")
+
+        return temp_file.name
 
     def load_model(self):
         """Load trained CLIP model"""
@@ -55,8 +214,8 @@ class CLIPEvaluator:
         model_cfg = config['model_cfg']['params']
         model = CLIP(**model_cfg)
 
-        # Load checkpoint
-        checkpoint = torch.load(self.model_path, map_location='cpu')
+        # Load checkpoint with weights_only=False to handle EasyDict
+        checkpoint = torch.load(self.model_path, map_location='cpu', weights_only=False)
 
         # Handle different checkpoint formats
         if 'state_dict' in checkpoint:
@@ -106,16 +265,23 @@ class CLIPEvaluator:
                     if isinstance(batch[key], torch.Tensor):
                         batch[key] = batch[key].to(self.device)
 
-                # Get features
-                radar_features = self.model.encode_radar(
-                    batch['input_wave_range'],
-                    batch['input_wave_doppler'],
-                    batch['input_wave_azimuth']
+                # Prepare radar data - use correct key names that radar encoder expects
+                radar_data = {
+                    'range_time': batch['input_wave_range'],
+                    'doppler_time': batch['input_wave_doppler'],
+                    'azimuth_time': batch['input_wave_azimuth']
+                }
+
+                # Get features using new unified encoding method
+                encoding_results = self.model._encode_data(
+                    radar_data=radar_data,
+                    text_data=batch['caption']
                 )
 
-                text_features = self.model.encode_text(
-                    batch['caption'], device=self.device
-                )
+                # Extract features from encoding results
+                from src.core.base import ModalityType
+                radar_features = encoding_results[ModalityType.RADAR].features
+                text_features = encoding_results[ModalityType.TEXT].features
 
                 # Normalize features
                 radar_features = radar_features / radar_features.norm(dim=1, keepdim=True)
@@ -383,10 +549,16 @@ class CLIPEvaluator:
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate CLIP model')
-    parser.add_argument('--model_path', type=str, required=True,
-                        help='Path to trained model checkpoint')
-    parser.add_argument('--config_path', type=str, required=True,
-                        help='Path to model configuration file (YAML format)')
+
+    # Create mutually exclusive group for model specification
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--model_path', type=str, default=None,
+                       help='Path to trained model checkpoint')
+    group.add_argument('--version', type=str, default=None,
+                       help='Version name or path to experiment directory. Will auto-discover last checkpoint and config files')
+
+    parser.add_argument('--config_path', type=str, default=None,
+                        help='Path to model configuration file (YAML format). If not specified, will auto-discover in checkpoint directory')
     parser.add_argument('--output_path', type=str, default='clip_evaluation_results.json',
                         help='Path to save evaluation results')
     parser.add_argument('--device', type=str, default='cuda',
@@ -402,6 +574,7 @@ def main():
     evaluator = CLIPEvaluator(
         model_path=args.model_path,
         config_path=args.config_path,
+        version_path=args.version,
         device=args.device,
         debug=args.debug,
         batch_size=args.batch_size

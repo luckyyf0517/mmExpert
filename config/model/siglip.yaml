@@ -12,7 +12,7 @@ params:
     model_name: 'vit_base_patch16_clip_224.openai'  # ViT model
     embed_dim: 256                               # Feature embedding dimension (must match transformer_width)
     fusion_method: 'add'                         # Fusion method: 'concat', 'add', or 'attention'
-    radar_views: 'all'                          # Radar views to use: 'all', 'doppler_only', 'range_only', 'azimuth_only'
+    radar_views: 'all'                          # Radar views to use: 'all', 'doppler', 'range', 'azimuth'
 
     # Radar signal resolutions
     range_resolution: [256, 496]    # Range-time spectrum dimensions

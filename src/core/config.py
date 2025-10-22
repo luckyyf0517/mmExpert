@@ -271,7 +271,7 @@ class DatasetConfig(BaseValidatedConfig):
         ValidationRule("normalize", required=False, field_type=str,
                       allowed_values=["none", "per_frame", "global", "log"]),
         ValidationRule("radar_views", required=False, field_type=str,
-                      allowed_values=["all", "doppler_only", "range_only", "azimuth_only"]),
+                      allowed_values=["all", "doppler", "range", "azimuth"]),
     ]
 
 
