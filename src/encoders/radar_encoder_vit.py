@@ -357,13 +357,8 @@ class RadarEncoderViT(BaseEncoder):
                 encoded_view = encoder(view_data)  # [batch, num_patches, embed_dim]
                 view_features.append(encoded_view)
             else:
-                # Create dummy features if view is missing
-                batch_size = self._get_batch_size(radar_data)
-                dummy_features = torch.zeros(
-                    batch_size, self.max_sequence_length, encoder.embed_dim,
-                    device=next(self.parameters()).device
-                )
-                view_features.append(dummy_features)
+                # Raise error if view is missing instead of using dummy
+                raise ValueError(f"Required radar view '{view_name}' is missing or None. All radar views must be provided.")
 
         # Concatenate view features along feature dimension
         if len(view_features) > 1:
