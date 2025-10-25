@@ -66,6 +66,10 @@ def parse_args():
     parser.add_argument('--data-config', dest="data_config", default="config/data/humanml3d.yaml", type=str, help="data config file path")
     parser.add_argument('--model-config', dest="model_config", default=None, type=str, help="model config file path")
 
+    # Add dry run mode
+    parser.add_argument('--dry-run', dest="dry_run", action="store_true", default=False,
+                       help="Dry run mode: run only 1 train/val step, no logging, for config validation")
+
     args = parser.parse_args()
     if args.test:
         assert args.resume_checkpoint is not None
@@ -80,13 +84,92 @@ if __name__ == '__main__':
 
     # Load configurations using args
     cfg = load_config(None, args.data_config, args.model_config)
-    
+
     # Extract model name only (basename without extension)
     model_name = os.path.splitext(os.path.basename(args.model_config))[0]
-    
+
     # Extract dataset name from data config path
     data_config_name = os.path.splitext(os.path.basename(args.data_config))[0]
-    
+
+    # Dry run mode handling
+    if args.dry_run:
+        print("🧪 DRY RUN MODE - Configuration Validation")
+        print("=" * 50)
+        print(f"📋 Model Config: {args.model_config}")
+        print(f"📊 Data Config: {args.data_config}")
+        print(f"🎯 Strategy: {args.strategy}")
+        print(f"🌱 Seed: {args.seed}")
+        print("=" * 50)
+
+        # Validate configs without logging
+        try:
+            # Validate model config
+            model_cfg = cfg.model_cfg
+            print("✅ Model configuration loaded successfully")
+            print(f"   - Model type: {model_cfg.target}")
+            print(f"   - Max epochs: {model_cfg.params.max_epochs}")
+            print(f"   - Learning rate: {model_cfg.params.learning_rate}")
+            print(f"   - Temperature: {model_cfg.params.temperature}")
+
+            # Validate data config
+            data_cfg = cfg.data_cfg
+            print("✅ Data configuration loaded successfully")
+            print(f"   - Dataset: {data_cfg.target}")
+            print(f"   - Batch size: {data_cfg.params.cfg.batch_size}")
+
+            # Test model instantiation (minimal)
+            print("✅ Testing model instantiation...")
+            model = instantiate_from_config(model_cfg)
+            print(f"   - Model instantiated: {type(model).__name__}")
+
+            # Test data loading (minimal)
+            print("✅ Testing data loading...")
+            data = instantiate_from_config(data_cfg)
+            print(f"   - Data module instantiated: {type(data).__name__}")
+
+            # Test forward pass with minimal data
+            print("✅ Testing forward pass...")
+            data.setup('fit')
+
+            # Get single batch for testing
+            train_loader = data.train_dataloader()
+            val_loader = data.val_dataloader()
+
+            print("   - Loading single batch from train loader...")
+            train_batch = next(iter(train_loader))
+            train_shapes = {k: (v.shape if hasattr(v, 'shape') else str(type(v))) for k, v in train_batch.items()}
+            print(f"   - Train batch shapes: {train_shapes}")
+
+            print("   - Loading single batch from val loader...")
+            val_batch = next(iter(val_loader))
+            val_shapes = {k: (v.shape if hasattr(v, 'shape') else str(type(v))) for k, v in val_batch.items()}
+            print(f"   - Val batch shapes: {val_shapes}")
+
+            # Test model forward pass
+            print("   - Running model forward pass...")
+            with torch.no_grad():
+                # Dummy step for validation
+                dummy_logits = model(train_batch)
+                if hasattr(dummy_logits, 'loss'):
+                    print(f"   - Model output (loss): {dummy_logits.loss:.6f}")
+                else:
+                    output_shapes = {k: (v.shape if hasattr(v, 'shape') else str(type(v))) for k, v in dummy_logits.items() if hasattr(v, 'shape')}
+                    print(f"   - Model output shape: {output_shapes}")
+
+            print("\n🎉 DRY RUN SUCCESSFUL - Configuration is valid!")
+            print("💡 Use this command to start full training:")
+            print(f"   python run_clip.py --model-config {args.model_config} --data-config {args.data_config}")
+
+        except Exception as e:
+            print(f"\n❌ DRY RUN FAILED - Configuration error detected!")
+            print(f"Error: {str(e)}")
+            print("\n🔧 Please check your configuration files:")
+            print(f"   - Model config: {args.model_config}")
+            print(f"   - Data config: {args.data_config}")
+
+        exit()
+
+    # Normal training mode (original logic)
     # Extract experiment folder name from model config path
     config_path_parts = args.model_config.split('/')
     exp_folder = None
@@ -94,7 +177,7 @@ if __name__ == '__main__':
         if part.startswith('experiments-'):
             exp_folder = part
             break
-    
+
     if exp_folder is None:
         exp_folder = 'experiments'
 
@@ -124,7 +207,7 @@ if __name__ == '__main__':
     data_cfg.params.cfg.batch_size = data_cfg.params.cfg.batch_size // args.world_size  # for each gpu
     data = instantiate_from_config(data_cfg)
     data.setup('fit')
-    
+
     # Set random seed
     set_seed(seed=args.seed, n_gpu=args.world_size)
 
@@ -167,11 +250,11 @@ if __name__ == '__main__':
         num_sanity_val_steps=2, # run validation step experimentaly
         reload_dataloaders_every_n_epochs=1,
         callbacks=[checkpoint_callback],
-        enable_progress_bar=True) 
+        enable_progress_bar=True)
 
     if not args.test:
-        trainer.fit(model, train_dataloaders=data.train_dataloader(), 
-                    val_dataloaders=[data.val_dataloader()], 
+        trainer.fit(model, train_dataloaders=data.train_dataloader(),
+                    val_dataloaders=[data.val_dataloader()],
                     ckpt_path=args.resume_checkpoint if args.resume_checkpoint else None)
-    else: 
+    else:
         trainer.test(model, datamodule=data, ckpt_path=args.resume_checkpoint if args.resume_checkpoint else None)
