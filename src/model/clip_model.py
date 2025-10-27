@@ -133,8 +133,13 @@ class CLIPModel(pl.LightningModule):
         # Create loss function using the existing clip_loss implementations
         self.criterion = self._create_loss_function()
 
-        # Initialize similarity parameters (only if not using SigLip)
-        if not use_siglip:
+        # Initialize similarity parameters
+        if use_siglip:
+            # SigLIP needs learnable parameters
+            self.logit_scale = nn.Parameter(np.log(1 / self.temperature))
+            self.logit_bias = nn.Parameter(torch.zeros(1))
+        else:
+            # Standard CLIP uses fixed temperature
             self.logit_scale = 1.0 / temperature
 
         # Create sequence similarity module if needed
@@ -423,14 +428,8 @@ class CLIPModel(pl.LightningModule):
         """
         # Use integrated loss function
         if self.use_siglip:
-            # SigLIP loss
-            if hasattr(self, 'logit_scale') and hasattr(self, 'logit_bias'):
-                total_loss = self.criterion(radar_features, text_features, self.logit_scale, self.logit_bias)
-            else:
-                default_logit_scale = np.log(1 / self.temperature)
-                default_logit_bias = torch.tensor(0.0, device=radar_features.device)
-                total_loss = self.criterion(radar_features, text_features, default_logit_scale, default_logit_bias)
-
+            # SigLIP loss - use learnable parameters directly, no fallback
+            total_loss = self.criterion(radar_features, text_features, self.logit_scale, self.logit_bias)
             return {"loss_clip": total_loss}
         else:
             # Standard CLIP loss
@@ -593,7 +592,8 @@ class CLIPModel(pl.LightningModule):
                 'lr': self.learning_rate
             })
 
-        if self.use_siglip and hasattr(self, 'logit_scale') and hasattr(self, 'logit_bias'):
+        if self.use_siglip:
+            # Add SigLIP learnable parameters to optimizer
             param_groups.append({
                 'params': [self.logit_scale, self.logit_bias],
                 'lr': self.learning_rate
