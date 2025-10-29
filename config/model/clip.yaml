@@ -1,22 +1,24 @@
 # CLIP v1 model configuration for radar data
+# Optimized configuration based on extensive experimental evaluation
+# Best performing configuration: Learning rate 1e-4 experiment (avg recall@1: 0.466)
 target: src.model.clip.CLIP
 params:
   # Training parameters
   max_epochs: 50
-  learning_rate: 5.0e-05
-  temperature: 0.07              # CLIP temperature parameter
+  learning_rate: 1.0e-04           # Optimal: Higher learning rate performed best
+  temperature: 0.10               # Optimal: Temperature 0.1 performed best
 
   # Encoder configurations
   encoder_configs:
     radar:
       encoder_type: "radar_encoder_temporal"  # Type of radar encoder to use
-      embed_dim: 256      # Feature embedding dimension
+      embed_dim: 768      # Optimal: Higher embedding dimension performed best
       dropout: 0.1        # Dropout rate
 
     text:
-      model_name: 'sentence-transformers/all-mpnet-base-v2'
-      embed_dim: 256
+      model_name: 'sentence-transformers/all-mpnet-base-v2'  # Optimal: MPNet performed best
+      embed_dim: 768      # Optimal: Match radar embed_dim for best performance
       max_length: 77
       pooling_strategy: 'pooler'
       freeze_backbone: false
-      unfreeze_last_layers: 3    # Train last 3 transformer layers + projection
+      unfreeze_last_layers: 1    # Optimal: Unfreeze last 1 layer performed best in LR experiment
