@@ -136,8 +136,8 @@ class CLIPModel(pl.LightningModule):
         # Initialize similarity parameters
         if use_siglip:
             # SigLIP needs learnable parameters
-            self.logit_scale = nn.Parameter(np.log(1 / self.temperature))
-            self.logit_bias = nn.Parameter(torch.zeros(1))
+            self.logit_scale = nn.Parameter(torch.tensor(np.log(1 / self.temperature), dtype=torch.float32))
+            self.logit_bias = nn.Parameter(torch.zeros(1, dtype=torch.float32))
         else:
             # Standard CLIP uses fixed temperature
             self.logit_scale = 1.0 / temperature

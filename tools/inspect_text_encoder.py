@@ -52,8 +52,8 @@ def analyze_model_structure(model_name, verbose=False):
     try:
         # Load model
         print("Loading model...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=False)
-        model = AutoModel.from_pretrained(model_name, local_files_only=False)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+        model = AutoModel.from_pretrained(model_name, local_files_only=True)
         
         # Set padding token if not present
         if tokenizer.pad_token is None:
