@@ -29,8 +29,7 @@ class ViewEncoder(nn.Module):
                  target_sz: Tuple[int, int], freeze_bb: bool, max_seq_len: int):
         super().__init__()
 
-        # Handle rectangular patches by using max dimension for ViT model
-        # ViT requires square patches, so we'll use the larger dimension
+        # Handle rectangular patches properly
         if isinstance(patch_sz, (list, tuple)):
             # Handle nested tuples/lists by flattening
             if len(patch_sz) == 2 and isinstance(patch_sz[0], (list, tuple)):
@@ -40,26 +39,22 @@ class ViewEncoder(nn.Module):
 
             # Ensure we have a simple list/tuple of 2 integers
             if isinstance(patch_sz, (list, tuple)) and len(patch_sz) == 2 and all(isinstance(p, int) for p in patch_sz):
-                # Use the larger dimension for ViT patch size
-                patch_size_for_vit = max(patch_sz)
-                self.patch_size = list(patch_sz)  # Store as simple list
+                self.patch_size = list(patch_sz)  # Store as simple list [height, width]
             else:
                 raise ValueError(f"Invalid patch_sz format after processing: {patch_sz}. Expected [height, width] with integer values.")
         else:
-            # For square patches, use as-is
-            patch_size_for_vit = patch_sz
+            # For square patches, convert to list format
             self.patch_size = [patch_sz, patch_sz]  # Store as list for consistency
 
-        # Create Vision Transformer model with square patches
+        # Create Vision Transformer model with rectangular patches
+        # timm supports rectangular patches by setting patch_size as (height, width)
         self.vit = timm.create_model(
             vit_model_name,
             pretrained=True,
             num_classes=0,  # Remove classification head
             img_size=target_sz,
-            patch_size=patch_size_for_vit
+            patch_size=tuple(self.patch_size)  # Use rectangular patch size
         )
-
-        self.patch_size_for_vit = patch_size_for_vit  # Store square patch size for ViT
         self.target_size = target_sz
         self.embed_dim = self.vit.embed_dim
         self.max_sequence_length = max_seq_len  # Store max sequence length
@@ -102,14 +97,11 @@ class ViewEncoder(nn.Module):
         if x.size(1) == 1:
             x = x.repeat(1, 3, 1, 1)
 
-        # Extract features using ViT
-        features = self.vit(x)  # [batch_size, num_patches, embed_dim]
+        # Extract features using ViT forward_features to get patch tokens
+        features = self.vit.forward_features(x)  # [batch_size, num_patches, embed_dim]
 
-        # Standardize number of patches
-        if features.dim() == 2:
-            # If ViT returns 2D tensor [batch_size, embed_dim], reshape to 3D
-            features = features.unsqueeze(1)  # [batch_size, 1, embed_dim]
-        elif features.size(1) != self.max_sequence_length:
+        # Standardize number of patches if needed
+        if features.size(1) != self.max_sequence_length:
             # Transpose for adaptive pooling
             features = features.transpose(1, 2)  # [batch_size, embed_dim, num_patches]
             features = self.adaptive_pool(features)  # [batch_size, embed_dim, target_patches]
