@@ -11,9 +11,22 @@ params:
   # Encoder configurations
   encoder_configs:
     radar:
-      encoder_type: "radar_encoder_temporal"  # Type of radar encoder to use
+      encoder_type: "radar_encoder_vit"  # Type of radar encoder to use
       embed_dim: 768      # Optimal: Higher embedding dimension performed best
       dropout: 0.1        # Dropout rate
+
+      # ViT-specific parameters
+      vit_model: "vit_small_patch16_224.augreg_in21k"  # ImageNet-21K pretrained model
+      pretrained: true
+      freeze_backbone: false
+      use_layer_norm: true
+
+      # Patch size configuration for different views
+      patch_size_range: [32, 16]
+      patch_size_other: [16, 16]
+
+      # Sequence configuration
+      max_sequence_length: 248
 
     text:
       model_name: 'sentence-transformers/all-mpnet-base-v2'  # Optimal: MPNet performed best
