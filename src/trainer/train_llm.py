@@ -102,6 +102,30 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_bias: str = "none"
     fix_vae: bool = True
 
+def _convert_model_to_dtype(model, target_dtype):
+    """
+    Recursively convert all parameters and buffers in the model to target dtype.
+    This is critical for FSDP which requires uniform dtype across all parameters.
+    """
+    converted_params = 0
+    converted_buffers = 0
+    
+    for name, param in model.named_parameters():
+        if param.dtype != target_dtype and param.dtype in (torch.float32, torch.float16, torch.bfloat16):
+            param.data = param.data.to(dtype=target_dtype)
+            converted_params += 1
+    
+    for name, buffer in model.named_buffers():
+        if buffer.dtype != target_dtype and buffer.dtype in (torch.float32, torch.float16, torch.bfloat16):
+            buffer.data = buffer.data.to(dtype=target_dtype)
+            converted_buffers += 1
+    
+    if converted_params > 0 or converted_buffers > 0:
+        print(f"Converted {converted_params} parameters and {converted_buffers} buffers to {target_dtype}")
+    
+    return model
+
+
 class ModelInitializer:
     """
     Handles model initialization with improved error handling and logging.
@@ -325,6 +349,28 @@ class RadarEncoderManager:
         try:
             self.logger.info(f"Loading radar encoder from {self.data_args.data_root}")
             model.get_model().load_wave_encoder(self.data_args.data_root)
+            
+            # Ensure radar encoder uses the same dtype as the main model
+            # This is critical for FSDP which requires uniform dtype across all parameters
+            model_dtype = next(model.parameters()).dtype
+            
+            # Convert radar encoder and all its submodules to match model dtype
+            if hasattr(model.get_model(), 'wave_encoder') and model.get_model().wave_encoder is not None:
+                # Recursively convert all parameters to match model dtype
+                for param in model.get_model().wave_encoder.parameters():
+                    param.data = param.data.to(dtype=model_dtype)
+                # Also convert buffers (e.g., running_mean, running_var in BatchNorm)
+                for buffer in model.get_model().wave_encoder.buffers():
+                    if buffer.dtype in (torch.float32, torch.float16, torch.bfloat16):
+                        buffer.data = buffer.data.to(dtype=model_dtype)
+                self.logger.debug(f"Converted radar encoder to {model_dtype}")
+            
+            # Also ensure projection layers use the same dtype
+            if hasattr(model.get_model(), 'mm_projection_layers'):
+                for param in model.get_model().mm_projection_layers.parameters():
+                    param.data = param.data.to(dtype=model_dtype)
+                self.logger.debug(f"Converted projection layers to {model_dtype}")
+            
             self.logger.debug("Radar encoder loaded successfully")
         except Exception as e:
             self.logger.error(f"Failed to load radar encoder: {str(e)}")
@@ -402,6 +448,9 @@ class TrainingPipeline:
         try:
             self.logger.info("Starting WaveLLM training pipeline")
 
+            # Set default conversation template to phi3 (MPT style)
+            conversation_lib.default_conversation = conversation_lib.conv_templates["conv_phi3"]
+
             # Initialize model
             model = self.model_initializer.initialize_model()
             model.config.use_cache = False
@@ -420,6 +469,12 @@ class TrainingPipeline:
 
             # Apply parameter strategy
             self.parameter_manager.apply_parameter_strategy(model)
+
+            # Ensure all parameters have uniform dtype for FSDP compatibility
+            # This must be done after all model modifications (LoRA, tokens, encoder, etc.)
+            model_dtype = next(model.parameters()).dtype
+            self.logger.debug(f"Converting all model parameters to {model_dtype} for FSDP compatibility")
+            _convert_model_to_dtype(model, model_dtype)
 
             # Print trainable parameters
             self.parameter_manager.print_trainable_parameters(model)

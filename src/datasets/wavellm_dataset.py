@@ -78,13 +78,17 @@ class DataCollatorForWaveTextDataset(object):
         
         if "wave_embed" in instances[0].keys():
             # Stack radar data: range_time, doppler_time, azimuth_time
-            range_data = torch.stack([instance['wave_embed']['range_time'] for instance in instances])
-            doppler_data = torch.stack([instance['wave_embed']['doppler_time'] for instance in instances])
-            azimuth_data = torch.stack([instance['wave_embed']['azimuth_time'] for instance in instances])
-
-            batch['input_wave_range'] = range_data
-            batch['input_wave_doppler'] = doppler_data
-            batch['input_wave_azimuth'] = azimuth_data
+            # Keep original [B, H, W] format for each view, encoder will handle processing
+            range_data = torch.stack([instance['wave_embed']['range_time'] for instance in instances])  # [B, 256, T]
+            doppler_data = torch.stack([instance['wave_embed']['doppler_time'] for instance in instances])  # [B, 128, T]
+            azimuth_data = torch.stack([instance['wave_embed']['azimuth_time'] for instance in instances])  # [B, 128, T]
+            
+            # Pass as dict to encoder - encoder will handle all processing and return [B, N, C] features
+            batch['radar_data'] = {
+                'range_time': range_data,
+                'doppler_time': doppler_data,
+                'azimuth_time': azimuth_data
+            }
             
         return batch
 
@@ -237,14 +241,20 @@ class WaveCaptionDataset(Dataset):
                 # If dataset_cfg is not in YAML, return default config
                 return edict(DEFAULT_REAL_CONFIG)
     
-    def _get_filename(self, data_item, postfix):
-        """Get filename for motion data with specific postfix."""
-        file_path = os.path.join(data_item['filefolder'], data_item['fileindex'] + postfix)
-        # debug: set the used file folder
-        file_path = file_path.replace('udoppler', 'udoppler_rotation')
-        if os.path.exists(file_path):
-            return file_path
-        raise FileNotFoundError(f"File {data_item['filefolder']}/{data_item['fileindex'] + postfix} not found")
+    def _get_radar_path(self, data_item):
+        """Get radar NPZ file path using the same logic as base_dataset.py."""
+        motion_folder = data_item['filefolder']
+        # Replace udoppler with mmwave (matching base_dataset.py)
+        mmwave_postfix = self.opt.get('mmwave_postfix', '')
+        motion_folder = motion_folder.replace('udoppler', 'mmwave' + mmwave_postfix)
+        motion_index = data_item['fileindex']
+        
+        # Return NPZ file path (radar format from DATA_FORMAT.md)
+        radar_path = os.path.join(motion_folder, f'{motion_index}.npz')
+        
+        if not os.path.exists(radar_path):
+            raise FileNotFoundError(f"Radar file not found: {radar_path}")
+        return radar_path
     
     def _load_data(self):
         """Load and process dataset."""
@@ -316,20 +326,17 @@ class WaveCaptionDataset(Dataset):
             return questions
     
     def _create_data_items(self, data_item, qa):
-        """Create data items for all postfixes."""
-        postfixes = ['A.npy', 'B.npy', 'C.npy', 'D.npy', 'E.npy', 'F.npy', 'G.npy', 'H.npy']
-        data_items = []
+        """Create data items using NPZ file format (new data organization)."""
+        # New data format uses single NPZ file per sample (no rotation postfixes)
+        radar_path = self._get_radar_path(data_item)
         
-        if 'test' in self.split:
-            postfixes = [random.choice(postfixes)]
-            
-        for postfix in postfixes:
-            data_items.append({
-                'filename': self._get_filename(data_item, postfix),
-                'question': qa.get('question') if qa else None,
-                'answer': qa.get('answer') if qa else '',
-                'caption': "\n".join(data_item['captions'])
-            })
+        data_items = [{
+            'filename': radar_path,
+            'question': qa.get('question') if qa else None,
+            'answer': qa.get('answer') if qa else '',
+            'caption': "\n".join(data_item['captions'])
+        }]
+        
         return data_items
 
     def __len__(self):

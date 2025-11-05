@@ -9,7 +9,7 @@ output_dir=output/$filename
 model_name_or_path=/root/autodl-tmp/mmExpert/huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/0a67737cc96d2554230f90338b163bc6380a2a85
 
 PYTHONPATH=$dir_path:$PYTHONPATH \
-CUDA_VISIBLE_DEVICES=0,1 torchrun --nnodes=1 --nproc_per_node=2 --master_port=$master_port src/trainer/train_llm.py \
+CUDA_VISIBLE_DEVICES=0 torchrun --nnodes=1 --nproc_per_node=1 --master_port=$master_port src/trainer/train_llm.py \
     --model_name_or_path $model_name_or_path\
     --model_max_length 2048 \
     --model_debug False\

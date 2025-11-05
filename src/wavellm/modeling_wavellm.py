@@ -246,60 +246,53 @@ class WaveLLM(Phi3Model):
     def _wrap_encoder_for_training(self, encoder):
         """
         Wrap radar encoder to handle training pipeline input format.
-
-        Converts input_wave_embeds [B, N, C] to separate views expected by radar encoders.
+        Encoder already handles all data processing and returns [B, N, C] sequence features.
         """
         class EncoderWrapper(nn.Module):
-            """Simple wrapper for radar encoder to handle training pipeline input format."""
+            """Simple wrapper for radar encoder."""
 
             def __init__(self, base_encoder):
                 super().__init__()
                 self.base_encoder = base_encoder
                 self.embed_dim = base_encoder.embed_dim
-                self._encoder_config = getattr(base_encoder, '_encoder_config', {})
 
-            def _convert_to_views(self, input_wave_embeds: torch.Tensor):
-                """Convert input tensor to three separate views."""
-                batch_size, n_points, channels = input_wave_embeds.shape
-
-                # Determine expected points per view from config
-                encoder_type = self._encoder_config.get('encoder_type', 'radar_encoder_temporal')
-                max_seq_len = self._encoder_config.get('max_sequence_length', 248)
-
-                if encoder_type == 'radar_encoder_vit' and n_points == max_seq_len * 3:
-                    # Standard three-view format
-                    points_per_view = max_seq_len
-                else:
-                    # Equal splitting
-                    if n_points % 3 != 0:
-                        raise ValueError(f"Input points {n_points} must be divisible by 3 for three views")
-                    points_per_view = n_points // 3
-
-                # Split into three views and transpose for encoder format
-                range_data = input_wave_embeds[:, :points_per_view, :].transpose(1, 2)
-                doppler_data = input_wave_embeds[:, points_per_view:2*points_per_view, :].transpose(1, 2)
-                azimuth_data = input_wave_embeds[:, 2*points_per_view:, :].transpose(1, 2)
-
-                return range_data, doppler_data, azimuth_data
-
-            def forward(self, input_wave_embeds: torch.Tensor, return_sequence: bool = False):
-                """Forward pass with strict input validation."""
-                if not isinstance(input_wave_embeds, torch.Tensor):
-                    raise TypeError(f"input_wave_embeds must be torch.Tensor, got {type(input_wave_embeds)}")
-
-                if input_wave_embeds.dim() != 3:
-                    raise ValueError(f"input_wave_embeds must be 3D tensor, got shape {input_wave_embeds.shape}")
-
-                # Convert to views
-                range_data, doppler_data, azimuth_data = self._convert_to_views(input_wave_embeds)
-
-                # Forward through base encoder
-                return self.base_encoder(
-                    range_data=range_data,
-                    doppler_data=doppler_data,
-                    azimuth_data=azimuth_data,
-                    return_sequence=return_sequence
+            def forward(self, input_wave_embeds: torch.Tensor = None, radar_data: dict = None, return_sequence: bool = False):
+                """
+                Forward pass.
+                
+                Args:
+                    input_wave_embeds: [B, N, C] pre-encoded features (optional)
+                    radar_data: Dict with 'range_time', 'doppler_time', 'azimuth_time' (optional)
+                    return_sequence: Whether to return sequence features
+                
+                Returns:
+                    [B, N, C] sequence features from encoder
+                """
+                from ..core.base import ModalityData, ModalityType
+                
+                # If input_wave_embeds is already provided and is [B, N, C], use it directly
+                if input_wave_embeds is not None and input_wave_embeds.dim() == 3:
+                    if input_wave_embeds.shape[2] == self.embed_dim:
+                        # Already encoded features, return directly
+                        return input_wave_embeds if return_sequence else input_wave_embeds.mean(dim=1)
+                
+                # Otherwise, use radar_data dict to encode
+                if radar_data is None:
+                    raise ValueError("Either input_wave_embeds or radar_data must be provided")
+                
+                # Create ModalityData and encode
+                modality_data = ModalityData(
+                    data=radar_data,
+                    modality=ModalityType.RADAR,
+                    metadata={"format": "multi_view"}
                 )
+                
+                result = self.base_encoder.encode(modality_data, return_sequence=return_sequence)
+                
+                if return_sequence:
+                    return result.sequence_features  # [B, N, C]
+                else:
+                    return result.features  # [B, C]
 
         return EncoderWrapper(encoder).eval()
 
@@ -310,6 +303,9 @@ class WaveLLM(Phi3Model):
         self.mmwave_latent_dim = actual_embed_dim
         self.vae_latent_dim = actual_embed_dim
 
+        # Get dtype from existing parameters to maintain consistency
+        model_dtype = next(self.parameters()).dtype if list(self.parameters()) else torch.float32
+
         # Rebuild projection layers
         self.mm_projection_layers = nn.Linear(actual_embed_dim, self.config.hidden_size)
 
@@ -317,6 +313,9 @@ class WaveLLM(Phi3Model):
         nn.init.xavier_uniform_(self.mm_projection_layers.weight)
         if self.mm_projection_layers.bias is not None:
             nn.init.constant_(self.mm_projection_layers.bias, 0)
+        
+        # Convert to model dtype immediately to avoid FSDP dtype mismatch
+        self.mm_projection_layers = self.mm_projection_layers.to(dtype=model_dtype)
 
     def get_encoder_info(self) -> Dict[str, Any]:
         """Get information about the loaded encoder."""
@@ -326,6 +325,135 @@ class WaveLLM(Phi3Model):
             'has_encoder': hasattr(self, 'wave_encoder'),
             'encoder_config': self._encoder_config
         }
+
+    def _get_wave_features(self, radar_data=None, input_wave_embeds=None, input_wave_tokens=None):
+        """
+        Get wave features from encoder.
+        
+        Args:
+            radar_data: Dict with raw radar data (preferred)
+            input_wave_embeds: Pre-encoded features [B, N, C]
+            input_wave_tokens: Wave tokens (not supported)
+            
+        Returns:
+            wave_features: [B, N, hidden_size] projected features
+        """
+        if radar_data is not None:
+            features = self.wave_encoder(radar_data=radar_data, return_sequence=True)
+        elif input_wave_embeds is not None:
+            features = self.wave_encoder(input_wave_embeds=input_wave_embeds, return_sequence=True)
+        elif input_wave_tokens is not None:
+            raise ValueError("input_wave_tokens is not supported, use radar_data instead")
+        else:
+            raise ValueError("Either radar_data or input_wave_embeds must be provided")
+        
+        # Project to model hidden size
+        return self.mm_projection_layers(features)  # [B, N, hidden_size]
+    
+    def _replace_wave_tokens_with_embeds(self, input_ids, inputs_embeds, wave_features):
+        """
+        Replace wave tokens in input_ids with corresponding wave embeddings.
+        
+        Args:
+            input_ids: [B, L] token ids
+            inputs_embeds: [B, L, C] token embeddings
+            wave_features: [B, N, C] wave features to insert
+            
+        Returns:
+            new_inputs_embeds: [B, L', C] updated embeddings with wave features
+        """
+        orig_embeds_params = getattr(self, 'orig_embeds_params', None)
+        new_input_embeds = []
+        cur_wave_idx = 0
+        
+        for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds):
+            cur_wave_features = wave_features[cur_wave_idx].to(device=cur_input_embeds.device)
+            num_patches = cur_wave_features.shape[0]
+            
+            if self.config.mm_use_wave_start_end:
+                new_embeds = self._replace_wave_start_end_tokens(
+                    cur_input_ids, cur_input_embeds, cur_wave_features, 
+                    num_patches, orig_embeds_params
+                )
+            else:
+                new_embeds = self._replace_wave_patch_tokens(
+                    cur_input_ids, cur_input_embeds, cur_wave_features,
+                    num_patches, orig_embeds_params
+                )
+            
+            new_input_embeds.append(new_embeds)
+            cur_wave_idx += 1
+        
+        return torch.stack(new_input_embeds, dim=0)
+    
+    def _replace_wave_start_end_tokens(self, input_ids, input_embeds, wave_features, 
+                                       num_patches, orig_embeds_params):
+        """Replace wave start/end tokens with wave features."""
+        # Validate token counts
+        num_start = (input_ids == self.config.wave_start_token).sum()
+        num_end = (input_ids == self.config.wave_end_token).sum()
+        if num_start != num_end:
+            raise ValueError(f"Mismatched wave tokens: {num_start} start vs {num_end} end")
+        
+        wave_start_positions = torch.where(input_ids == self.config.wave_start_token)[0]
+        
+        # Process each wave start token group
+        # Note: Multiple groups are handled by processing from end to start to avoid index shifting
+        for start_pos in reversed(wave_start_positions):
+            end_pos = start_pos + num_patches + 1
+            if input_ids[end_pos] != self.config.wave_end_token:
+                raise ValueError(f"Wave end token not found at position {end_pos}")
+            
+            # Replace tokens with wave features (from end to start to avoid index issues)
+            if orig_embeds_params is not None:
+                # Keep original embeddings except for wave tokens
+                input_embeds = torch.cat([
+                    input_embeds[:start_pos].detach(),
+                    input_embeds[start_pos:start_pos+1],  # Keep start token
+                    wave_features,
+                    input_embeds[end_pos:end_pos+1],  # Keep end token
+                    input_embeds[end_pos+1:].detach()
+                ], dim=0)
+            else:
+                input_embeds = torch.cat([
+                    input_embeds[:start_pos+1],
+                    wave_features,
+                    input_embeds[end_pos:]
+                ], dim=0)
+        
+        return input_embeds
+    
+    def _replace_wave_patch_tokens(self, input_ids, input_embeds, wave_features,
+                                   num_patches, orig_embeds_params):
+        """Replace wave patch tokens with wave features."""
+        # Validate token count
+        num_patch_tokens = (input_ids == self.config.wave_patch_token).sum()
+        if num_patch_tokens != num_patches:
+            raise ValueError(f"Mismatched patch tokens: {num_patch_tokens} tokens vs {num_patches} patches")
+        
+        # Validate consecutive tokens
+        patch_indices = torch.where(input_ids == self.config.wave_patch_token)[0]
+        start_idx = patch_indices[0]
+        expected_indices = torch.arange(start_idx, start_idx + num_patches, 
+                                       device=patch_indices.device, dtype=patch_indices.dtype)
+        if not torch.equal(patch_indices, expected_indices):
+            raise ValueError("Wave patch tokens must be consecutive")
+        
+        # Replace tokens with wave features
+        if orig_embeds_params is not None:
+            new_embeds = torch.cat([
+                input_embeds[:start_idx].detach(),
+                wave_features,
+                input_embeds[start_idx + num_patches:].detach()
+            ], dim=0)
+        else:
+            new_embeds = torch.cat([
+                input_embeds[:start_idx],
+                wave_features,
+                input_embeds[start_idx + num_patches:]
+            ], dim=0)
+        
+        return new_embeds
 
     def forward(
         self,
@@ -345,59 +473,37 @@ class WaveLLM(Phi3Model):
         num_logits_to_keep: int = 0,
         **kwargs
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-
+        # Initialize token embeddings
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        orig_embeds_params = getattr(self, 'orig_embeds_params', None)
-
-        if input_ids.shape[1] != 1 or self.training:
-            if input_wave_tokens is not None or input_wave_embeds is not None:
-                bs = input_ids.shape[0]
-                wave_features = self.mm_projection_layers(self.wave_encoder(input_wave_embeds, return_sequence=True))
-
-                new_input_embeds = []
-                cur_wave_idx = 0
-                for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds): # * input_ids: B, L; input_embeds: B, L, C
-                    
-                    cur_wave_features = wave_features[cur_wave_idx].to(device=cur_input_embeds.device)
-                    num_patches = cur_wave_features.shape[0] # * number of wave tokens
-
-                    if self.config.mm_use_wave_start_end:
-                        if (cur_input_ids == self.config.wave_start_token).sum() != (cur_input_ids == self.config.wave_end_token).sum():
-                            raise ValueError("The number of wave start tokens and wave end tokens should be the same.")
-                        wave_start_tokens = torch.where(cur_input_ids == self.config.wave_start_token)[0]
-                        for wave_start_token_pos in wave_start_tokens:
-                            if cur_input_ids[wave_start_token_pos + num_patches + 1] != self.config.wave_end_token:
-                                raise ValueError("The wave end token should follow the wave start token.")
-                            if orig_embeds_params is not None: # * will not update the original embeddings except for wave_START_TOKEN and wave_END_TOKEN
-                                cur_new_input_embeds = torch.cat((cur_input_embeds[:wave_start_token_pos].detach(), cur_input_embeds[wave_start_token_pos:wave_start_token_pos+1], cur_wave_features, cur_input_embeds[wave_start_token_pos + num_patches + 1:wave_start_token_pos + num_patches + 2], cur_input_embeds[wave_start_token_pos + num_patches + 2:].detach()), dim=0)
-                            else:
-                                cur_new_input_embeds = torch.cat((cur_input_embeds[:wave_start_token_pos+1], cur_wave_features, cur_input_embeds[wave_start_token_pos + num_patches + 1:]), dim=0)
-                            cur_wave_idx += 1
-                            
-                        new_input_embeds.append(cur_new_input_embeds)
-                    else:
-                        if (cur_input_ids == self.config.wave_patch_token).sum() != num_patches:
-                            raise ValueError("The number of wave patch tokens should be the same as the number of wave patches.")
-                        masked_indices = torch.where(cur_input_ids == self.config.wave_patch_token)[0]
-                        mask_index_start = masked_indices[0]
-                        if (masked_indices != torch.arange(mask_index_start, mask_index_start+num_patches, device=masked_indices.device, dtype=masked_indices.dtype)).any():
-                            raise ValueError("The wave patch tokens should be consecutive.")
-                        if orig_embeds_params is not None:
-                            cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start].detach(), cur_wave_features, cur_input_embeds[mask_index_start+num_patches:].detach()), dim=0)
-                        else:
-                            cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start], cur_wave_features, cur_input_embeds[mask_index_start+num_patches:]), dim=0)
-                        new_input_embeds.append(cur_new_input_embeds)
-                        cur_wave_idx += 1
-                inputs_embeds = torch.stack(new_input_embeds, dim=0)
-            else: 
-                raise ValueError("Either input_wave_tokens or input_wave_embeds should be provided.")
+        # Process wave data only in training or multi-token inference
+        should_process_wave = (input_ids.shape[1] != 1) or self.training
+        if should_process_wave:
+            radar_data = kwargs.get('radar_data', None)
+            has_wave_data = radar_data is not None or input_wave_embeds is not None or input_wave_tokens is not None
+            
+            if has_wave_data:
+                # Get wave features from encoder
+                wave_features = self._get_wave_features(
+                    radar_data=radar_data,
+                    input_wave_embeds=input_wave_embeds,
+                    input_wave_tokens=input_wave_tokens
+                )
+                
+                # Replace wave tokens with wave embeddings
+                inputs_embeds = self._replace_wave_tokens_with_embeds(
+                    input_ids, inputs_embeds, wave_features
+                )
 
         return super(WaveLLM, self).forward(
-            input_ids=None, attention_mask=attention_mask, past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds, use_cache=use_cache,
-            output_attentions=output_attentions, output_hidden_states=output_hidden_states,
+            input_ids=None,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             **kwargs
         )
@@ -465,6 +571,9 @@ class WaveLLMForCausalLM(Phi3ForCausalLM):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         position_ids = None
+        
+        # Extract radar_data from kwargs to pass to model
+        radar_data = kwargs.get('radar_data', None)
 
         outputs = self.model(input_ids=input_ids,
                              input_wave_tokens=input_wave_tokens,
@@ -477,7 +586,8 @@ class WaveLLMForCausalLM(Phi3ForCausalLM):
                              output_hidden_states=output_hidden_states,
                              return_dict=return_dict,
                              position_ids=position_ids,
-                             )
+                             radar_data=radar_data,
+                             **kwargs)
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
 
