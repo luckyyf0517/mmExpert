@@ -1,0 +1,50 @@
+# Configuration for fine-tuning Phi3 with mmwave features
+# This config uses the new Lightning-based training pipeline with conversation templates
+
+# Model configuration
+model_cfg:
+  model_type: phi3
+  encoder_path: "feature/20251105_090705_clip"  # Path to radar encoder
+  use_peft: true
+
+  # Model parameters
+  model:
+    model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/9a18a31c28aee2216a7a9aa280d4333ac51d40c9"
+    model_max_length: 2048
+
+  # LoRA configuration
+  peft_config:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    bias: "none"
+
+  # Conversation and wave token configuration
+  conversation_template: "conv_phi3"  # Use Phi3 conversation template
+  mm_use_wave_start_end: true          # Use <wave_bos> and <wave_eos> tokens
+  wave_token_len: 248                  # Number of <wave_patch> tokens per <wave>
+
+# Data configuration
+data_cfg:
+  data_root: "feature/20251105_090705_clip"  # Same as encoder_path
+  model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/9a18a31c28aee2216a7a9aa280d4333ac51d40c9"
+  model_max_length: 2048
+  batch_size: 8
+  num_workers: 4
+  split: "train_QAs"                     # Dataset split to use
+
+  # Conversation and wave token configuration
+  conversation_template: "conv_phi3"     # Must match model_cfg
+  mm_use_wave_start_end: true            # Must match model_cfg
+  wave_token_len: 248                    # Must match model_cfg
+
+# Training configuration
+training:
+  learning_rate: 5e-4
+  weight_decay: 0.0
+  max_epochs: 10
+  gradient_accumulation_steps: 1
+  warmup_steps: 100
+
+# Logging configuration
+log_dir: "output/phi3_mmwave_conv"
