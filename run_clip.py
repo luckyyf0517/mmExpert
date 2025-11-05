@@ -217,6 +217,11 @@ if __name__ == '__main__':
 
     # Instantiate model
     model_cfg = cfg.model_cfg
+    # Inject distributed training parameters into model config
+    if model_cfg.params is None:
+        model_cfg.params = {}
+    model_cfg.params['rank'] = args.rank
+    model_cfg.params['world_size'] = args.world_size
     model = instantiate_from_config(model_cfg)
 
     # End previous SwanLab experiment (if exists)

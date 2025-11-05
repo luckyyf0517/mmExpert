@@ -154,6 +154,43 @@ class CLIPModel(pl.LightningModule):
         # Training parameters
         self._training_step = 0
 
+    def on_train_start(self) -> None:
+        """
+        Called at the beginning of training after sanity check.
+        This is when distributed training is fully initialized.
+        """
+        super().on_train_start()
+        
+        # Update distributed parameters from actual environment
+        # PyTorch Lightning ensures distributed is initialized by this point
+        import os
+        
+        # Try to get from PyTorch distributed first
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            actual_rank = torch.distributed.get_rank()
+            actual_world_size = torch.distributed.get_world_size()
+            
+            if self.rank != actual_rank or self.world_size != actual_world_size:
+                if self.trainer and self.trainer.is_global_zero:
+                    print(f"⚠️  Updating distributed parameters: rank {self.rank}->{actual_rank}, world_size {self.world_size}->{actual_world_size}")
+                self.rank = actual_rank
+                self.world_size = actual_world_size
+                # Recreate loss function with correct parameters
+                self.criterion = self._create_loss_function()
+        
+        # Fallback to environment variables
+        env_rank = os.environ.get('RANK', None)
+        env_world_size = os.environ.get('WORLD_SIZE', None)
+        if env_rank is not None and env_world_size is not None:
+            env_rank = int(env_rank)
+            env_world_size = int(env_world_size)
+            if self.rank != env_rank or self.world_size != env_world_size:
+                if self.trainer and self.trainer.is_global_zero:
+                    print(f"⚠️  Updating from env vars: rank {self.rank}->{env_rank}, world_size {self.world_size}->{env_world_size}")
+                self.rank = env_rank
+                self.world_size = env_world_size
+                self.criterion = self._create_loss_function()
+
     def _create_encoders(self, encoder_configs: Dict[str, Any]) -> None:
         """Create encoders based on configurations."""
         # Create radar encoder
