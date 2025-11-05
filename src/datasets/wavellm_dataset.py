@@ -216,10 +216,26 @@ class WaveCaptionDataset(Dataset):
         if split == 'real':
             return edict(DEFAULT_REAL_CONFIG)
         else:
-            config_path = osp.join(data_root, 'config.json')
-            with open(config_path, 'r') as file:
-                yaml_data = edict(json.load(file))
-            return yaml_data.dataset_cfg
+            config_path = osp.join(data_root, 'radar_encoder_config.yaml')
+            try:
+                with open(config_path, 'r') as file:
+                    yaml_data = yaml.safe_load(file)
+            except yaml.constructor.ConstructorError:
+                from yaml import UnsafeLoader
+                with open(config_path, 'r') as file:
+                    yaml_data = yaml.load(file, Loader=UnsafeLoader)
+            
+            if yaml_data is None:
+                raise ValueError(f"YAML config is empty: {config_path}")
+            
+            yaml_data = edict(yaml_data)
+            
+            # Try to get dataset_cfg, fallback to default if not found
+            if 'dataset_cfg' in yaml_data and yaml_data.dataset_cfg is not None:
+                return edict(yaml_data.dataset_cfg)
+            else:
+                # If dataset_cfg is not in YAML, return default config
+                return edict(DEFAULT_REAL_CONFIG)
     
     def _get_filename(self, data_item, postfix):
         """Get filename for motion data with specific postfix."""
@@ -232,7 +248,11 @@ class WaveCaptionDataset(Dataset):
     
     def _load_data(self):
         """Load and process dataset."""
-        data_path = 'dataset/REAL/all.json' if self.split == 'real' else osp.join(self.data_root, f'{self.split}.json')
+        if self.split == 'real':
+            data_path = 'dataset/REAL/all.json'
+        else:
+            # Load data from _split directory
+            data_path = osp.join(self.data_root, '_split', f'{self.split}.json')
         
         with open(data_path) as f:
             data = json.load(f)

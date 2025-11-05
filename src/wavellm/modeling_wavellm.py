@@ -98,7 +98,7 @@ class WaveLLM(Phi3Model):
         # Load radar encoder
         return self._load_radar_encoder(encoder_version_path, config_path, weights_path)
 
-  def _load_radar_encoder(self, encoder_version_path: str, config_path: str, weights_path: str):
+    def _load_radar_encoder(self, encoder_version_path: str, config_path: str, weights_path: str):
         """
         Load radar encoder from YAML config and PyTorch weights.
 

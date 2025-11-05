@@ -15,9 +15,26 @@
 #    limitations under the License.
 
 import os
+import warnings
+import logging
+
 # Set HuggingFace to offline mode to avoid network calls during training
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["HF_DATASETS_OFFLINE"] = "1"
+
+# Suppress warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.training_args")
+warnings.filterwarnings("ignore", message=".*torch_dtype.*deprecated.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*Resized position embedding.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*Loading pretrained weights.*", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*Safe alternative available.*", category=UserWarning)
+
+# Suppress timm logger INFO messages
+logging.getLogger("timm").setLevel(logging.WARNING)
+logging.getLogger("timm.models").setLevel(logging.WARNING)
+logging.getLogger("timm.models._builder").setLevel(logging.WARNING)
+logging.getLogger("timm.models._hub").setLevel(logging.WARNING)
+logging.getLogger("timm.layers.pos_embed").setLevel(logging.WARNING)
 
 from dataclasses import dataclass, field
 import pathlib
@@ -57,7 +74,7 @@ def disable_torch_init():
 
 @dataclass
 class ModelArguments:
-    model_name_or_path: Optional[str] = field(default="")
+    model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
 
 @dataclass
 class DataArguments:
@@ -85,57 +102,464 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_bias: str = "none"
     fix_vae: bool = True
 
-# Borrowed from peft.utils.get_peft_model_state_dict
-def get_peft_state(named_params, state_dict, bias):
-    to_return = {}
-    if bias == "none":
-        to_return = {k: state_dict[k] for k in named_params if "lora_" in k}
-    elif bias == "all":
-        to_return = {k: state_dict[k] for k in named_params if "lora_" in k or "bias" in k}
-    elif bias == "lora_only":
-        maybe_lora_bias = {}
-        lora_bias_names = set()
-
-        for k in named_params:
-            if "lora_" in k:
-                to_return[k] = state_dict[k]
-                bias_name = k.split("lora_")[0] + "bias"
-                lora_bias_names.add(bias_name)
-            elif "bias" in k:
-                maybe_lora_bias[k] = state_dict[k]
-
-        for k, t in maybe_lora_bias.items():
-            if k in lora_bias_names:
-                to_return[k] = t
-    else:
-        raise NotImplementedError("The specified bias setting is not implemented.")
-    
-    return to_return
-
-def get_peft_state_non_lora(named_params, state_dict, require_grad_only=True):
-    to_return = {k: t for k, t in named_params.items() if "lora_" not in k}
-    if require_grad_only:
-        to_return = {k: state_dict[k] for k, t in to_return.items() if t.requires_grad}
-    return to_return
-
-def print_trainable_parameters(model):
+class ModelInitializer:
     """
-    Prints the number of trainable parameters in the model.
+    Handles model initialization with improved error handling and logging.
     """
-    trainable_params = 0
-    all_param = 0
-    for name, param in model.named_parameters():
-        all_param += param.numel()
-        if param.requires_grad:
-            trainable_params += param.numel()
-    print(
-        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
-    )
 
-def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
-                                   output_dir: str):
+    def __init__(self, model_args: ModelArguments, training_args: TrainingArguments):
+        self.model_args = model_args
+        self.training_args = training_args
+        self.logger = build_logger("ModelInitializer", "logs/model_init.log")
+
+    def initialize_model(self):
+        """Initialize the WaveLLM model with proper error handling."""
+        try:
+            if self.training_args.model_debug:
+                return self._initialize_debug_model()
+            else:
+                return self._initialize_production_model()
+        except Exception as e:
+            self.logger.error(f"Failed to initialize model: {str(e)}")
+            raise
+
+    def _initialize_debug_model(self):
+        """Initialize model in debug mode."""
+        self.logger.debug("Initializing model in debug mode")
+        config = transformers.AutoConfig.from_pretrained(
+            self.model_args.model_name_or_path,
+            cache_dir=self.training_args.cache_dir,
+            attn_implementation="flash_attention_2",
+        )
+        model = WaveLLMForCausalLM._from_config(
+            config,
+            dtype=torch.bfloat16,
+        )
+        return model
+
+    def _initialize_production_model(self):
+        """Initialize model in production mode."""
+        self.logger.info(f"Initializing model from {self.model_args.model_name_or_path}")
+        model = WaveLLMForCausalLM.from_pretrained(
+            self.model_args.model_name_or_path,
+            cache_dir=self.training_args.cache_dir,
+            attn_implementation="flash_attention_2",
+            dtype=torch.bfloat16,
+        )
+        return model
+
+class TokenizerManager:
+    """
+    Handles tokenizer initialization and configuration.
+    """
+
+    def __init__(self, model_args: ModelArguments, training_args: TrainingArguments):
+        self.model_args = model_args
+        self.training_args = training_args
+        self.logger = build_logger("TokenizerManager", "logs/tokenizer.log")
+
+    def initialize_tokenizer(self):
+        """Initialize tokenizer with proper configuration."""
+        try:
+            self.logger.debug("Initializing tokenizer")
+            tokenizer = transformers.AutoTokenizer.from_pretrained(
+                self.model_args.model_name_or_path,
+                cache_dir=self.training_args.cache_dir,
+                model_max_length=self.training_args.model_max_length,
+                padding_side="right",
+                use_fast=True,
+            )
+
+            # Set special tokens
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            return tokenizer
+        except Exception as e:
+            self.logger.error(f"Failed to initialize tokenizer: {str(e)}")
+            raise
+
+class LoRAManager:
+    """
+    Handles LoRA configuration and application with improved logic.
+    """
+
+    def __init__(self, training_args: TrainingArguments):
+        self.training_args = training_args
+        self.logger = build_logger("LoRAManager", "logs/lora.log")
+
+    def apply_lora(self, model):
+        """Apply LoRA to model if enabled."""
+        if not self.training_args.lora:
+            self.logger.debug("LoRA is disabled")
+            return model
+
+        try:
+            target_modules = self._find_target_modules(model)
+            lora_config = LoraConfig(
+                r=self.training_args.lora_r,
+                lora_alpha=self.training_args.lora_alpha,
+                target_modules=target_modules,
+                lora_dropout=self.training_args.lora_dropout,
+                bias=self.training_args.lora_bias,
+                task_type="CAUSAL_LM",
+            )
+
+            model = get_peft_model(model, lora_config)
+            self.logger.debug(f"LoRA applied with {len(target_modules)} target modules")
+            return model
+        except Exception as e:
+            self.logger.error(f"Failed to apply LoRA: {str(e)}")
+            raise
+
+    def _find_target_modules(self, model):
+        """Find linear modules for LoRA application."""
+        cls = torch.nn.Linear
+        lora_module_names = set()
+        for name, module in model.named_modules():
+            if any(mm_keyword in name for mm_keyword in self.training_args.do_not_add_lora_model):
+                continue
+            if isinstance(module, cls):
+                lora_module_names.add(name)
+
+        if 'lm_head' in lora_module_names:
+            lora_module_names.remove('lm_head')
+        return list(lora_module_names)
+
+class WaveTokenManager:
+    """
+    Handles wave-specific token initialization with improved logic.
+    """
+
+    def __init__(self, training_args: TrainingArguments):
+        self.training_args = training_args
+        self.logger = build_logger("WaveTokenManager", "logs/wave_tokens.log")
+
+        # Default wave tokens
+        self.wave_patch_token = "<wave_patch>"
+        self.wave_start_token = "<wave_bos>"
+        self.wave_end_token = "<wave_eos>"
+
+    def initialize_wave_tokens(self, model, tokenizer):
+        """Initialize wave-specific tokens in model and tokenizer."""
+        try:
+            self.logger.info("Initializing wave tokens")
+
+            # Add wave patch token
+            self._add_wave_patch_token(model, tokenizer)
+
+            # Add start/end tokens if needed
+            if self.training_args.tune_mm_mlp_adapter:
+                self._add_wave_start_end_tokens(model, tokenizer)
+
+            # Configure model
+            self._configure_model_tokens(model)
+
+            self.logger.debug("Wave tokens initialized successfully")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize wave tokens: {str(e)}")
+            raise
+
+    def _add_wave_patch_token(self, model, tokenizer):
+        """Add wave patch token."""
+        tokenizer.add_tokens([self.wave_patch_token], special_tokens=True)
+        model.resize_token_embeddings(len(tokenizer))
+        model.config.wave_patch_token = tokenizer.convert_tokens_to_ids([self.wave_patch_token])[0]
+
+    def _add_wave_start_end_tokens(self, model, tokenizer):
+        """Add wave start and end tokens."""
+        num_new_tokens = tokenizer.add_tokens(
+            [self.wave_start_token, self.wave_end_token], special_tokens=True
+        )
+        model.resize_token_embeddings(len(tokenizer))
+
+        model.config.wave_start_token = tokenizer.convert_tokens_to_ids([self.wave_start_token])[0]
+        model.config.wave_end_token = tokenizer.convert_tokens_to_ids([self.wave_end_token])[0]
+        model.config.mm_use_wave_start_end = True
+
+        # Initialize new token embeddings
+        if num_new_tokens > 0:
+            self._initialize_new_token_embeddings(model, num_new_tokens)
+
+    def _initialize_new_token_embeddings(self, model, num_new_tokens):
+        """Initialize new token embeddings."""
+        device = next(model.parameters()).device
+
+        input_embeddings = model.get_input_embeddings().weight.data
+        output_embeddings = model.get_output_embeddings().weight.data
+
+        # Use average of existing embeddings
+        input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+        output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(dim=0, keepdim=True)
+
+        input_embeddings[-num_new_tokens:] = input_embeddings_avg
+        output_embeddings[-num_new_tokens:] = output_embeddings_avg
+
+        # Configure training parameters
+        if self.training_args.fix_llm:
+            model.get_model().orig_embeds_params = [
+                model.get_input_embeddings().weight.data.clone().to(device=device)
+            ]
+            for p in model.get_output_embeddings().parameters():
+                p.requires_grad = False
+
+    def _configure_model_tokens(self, model):
+        """Configure model token settings."""
+        model.config.default_wave_patch_token = self.wave_patch_token
+        if hasattr(model.config, 'mm_use_wave_start_end') and model.config.mm_use_wave_start_end:
+            model.config.default_wave_start_token = self.wave_start_token
+            model.config.default_wave_end_token = self.wave_end_token
+
+class RadarEncoderManager:
+    """
+    Handles radar encoder loading with improved error handling.
+    """
+
+    def __init__(self, data_args: DataArguments):
+        self.data_args = data_args
+        self.logger = build_logger("RadarEncoderManager", "logs/radar_encoder.log")
+
+    def load_radar_encoder(self, model):
+        """Load radar encoder into the model."""
+        try:
+            self.logger.info(f"Loading radar encoder from {self.data_args.data_root}")
+            model.get_model().load_wave_encoder(self.data_args.data_root)
+            self.logger.debug("Radar encoder loaded successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to load radar encoder: {str(e)}")
+            raise
+
+class ParameterManager:
+    """
+    Manages parameter freezing strategy.
+    """
+
+    def __init__(self, training_args: TrainingArguments):
+        self.training_args = training_args
+        self.logger = build_logger("ParameterManager", "logs/parameters.log")
+
+    def apply_parameter_strategy(self, model):
+        """Apply parameter freezing strategy."""
+        try:
+            if self.training_args.fix_llm:
+                self.logger.info("Applying parameter freezing strategy")
+                model.requires_grad_(False)
+                model.get_model().fix_llm = True
+
+                if self.training_args.tune_mm_mlp_adapter:
+                    model.get_model().mm_projection_layers.requires_grad_(True)
+                    self.logger.info("MM projection layers set to trainable")
+            else:
+                self.logger.warning("LLM parameters are trainable (fix_llm=False)")
+
+        except Exception as e:
+            self.logger.error(f"Failed to apply parameter strategy: {str(e)}")
+            raise
+
+    def print_trainable_parameters(self, model):
+        """Print information about trainable parameters."""
+        trainable_params = 0
+        all_param = 0
+        trainable_layers = {}
+
+        for name, param in model.named_parameters():
+            all_param += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+                layer_name = name.split('.')[0]
+                if layer_name not in trainable_layers:
+                    trainable_layers[layer_name] = 0
+                trainable_layers[layer_name] += param.numel()
+
+        self.logger.info(f"Trainable params: {trainable_params} || All params: {all_param} || Trainable%: {100 * trainable_params / all_param}")
+
+        self.logger.info("Trainable parameters by layer:")
+        for layer, params in trainable_layers.items():
+            self.logger.info(f"  {layer}: {params} parameters")
+
+class TrainingPipeline:
+    """
+    Main training pipeline that coordinates all components.
+    """
+
+    def __init__(self, model_args: ModelArguments, data_args: DataArguments, training_args: TrainingArguments):
+        self.model_args = model_args
+        self.data_args = data_args
+        self.training_args = training_args
+        self.logger = build_logger("TrainingPipeline", "logs/training.log")
+
+        # Initialize managers
+        self.model_initializer = ModelInitializer(model_args, training_args)
+        self.tokenizer_manager = TokenizerManager(model_args, training_args)
+        self.lora_manager = LoRAManager(training_args)
+        self.wave_token_manager = WaveTokenManager(training_args)
+        self.radar_encoder_manager = RadarEncoderManager(data_args)
+        self.parameter_manager = ParameterManager(training_args)
+
+    def run_training(self):
+        """Execute the complete training pipeline."""
+        try:
+            self.logger.info("Starting WaveLLM training pipeline")
+
+            # Initialize model
+            model = self.model_initializer.initialize_model()
+            model.config.use_cache = False
+
+            # Initialize tokenizer
+            tokenizer = self.tokenizer_manager.initialize_tokenizer()
+
+            # Apply LoRA
+            model = self.lora_manager.apply_lora(model)
+
+            # Initialize wave tokens
+            self.wave_token_manager.initialize_wave_tokens(model, tokenizer)
+
+            # Load radar encoder
+            self.radar_encoder_manager.load_radar_encoder(model)
+
+            # Apply parameter strategy
+            self.parameter_manager.apply_parameter_strategy(model)
+
+            # Print trainable parameters
+            self.parameter_manager.print_trainable_parameters(model)
+
+            # Create data module
+            data_module = make_object_wave_data_module(tokenizer=tokenizer, data_args=self.data_args)
+
+            # Create trainer
+            trainer = self._create_trainer(model, tokenizer, data_module)
+
+            # Run training
+            self._run_training(trainer)
+
+            # Save model
+            self._save_model(trainer)
+
+            self.logger.info("Training pipeline completed successfully")
+
+        except Exception as e:
+            self.logger.error(f"Training pipeline failed: {str(e)}")
+            raise
+
+    def _create_trainer(self, model, tokenizer, data_module):
+        """Create the trainer with callbacks."""
+        # Add callbacks
+        callbacks = []
+
+        # Add SwanLab callback if available
+        if SWANLAB_AVAILABLE:
+            try:
+                swanlab_callback = SwanLabCallback(
+                    project="mmExpert-LLM",
+                    experiment_name=f"train-{self.training_args.output_dir.split('/')[-1]}",
+                    config={
+                        "model_name": self.model_args.model_name_or_path,
+                        "data_root": self.data_args.data_root,
+                        "split": self.data_args.split,
+                        "learning_rate": self.training_args.learning_rate,
+                        "batch_size": self.training_args.per_device_train_batch_size,
+                        "num_epochs": self.training_args.num_train_epochs,
+                        "lora_r": self.training_args.lora_r,
+                        "lora_alpha": self.training_args.lora_alpha,
+                        "lora_dropout": self.training_args.lora_dropout,
+                    }
+                )
+                callbacks.append(swanlab_callback)
+                self.logger.debug("SwanLab callback added for experiment tracking")
+            except Exception as e:
+                self.logger.warning(f"Failed to add SwanLab callback: {str(e)}")
+
+        # Create trainer
+        trainer = WaveLLMTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            args=self.training_args,
+            callbacks=callbacks,
+            **data_module
+        )
+
+        return trainer
+
+    def _run_training(self, trainer):
+        """Run the training process."""
+        self.logger.info("Starting training...")
+
+        if list(pathlib.Path(self.training_args.output_dir).glob("checkpoint-*")):
+            self.logger.info("Resuming from checkpoint")
+            trainer.train(resume_from_checkpoint=True)
+        else:
+            trainer.train()
+
+    def _save_model(self, trainer):
+        """Save the trained model."""
+        self.logger.info("Saving model...")
+
+        if self.training_args.lora:
+            self._save_lora_model(trainer)
+        else:
+            self._save_full_model(trainer)
+
+    def _save_lora_model(self, trainer):
+        """Save LoRA model weights."""
+        if trainer.is_fsdp_enabled:
+            trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
+
+        if self.training_args.local_rank == 0 or self.training_args.local_rank == -1:
+            named_params = dict(trainer.model.named_parameters())
+            named_params = {k.replace('_fsdp_wrapped_module.', ''):t for k,t in named_params.items()}
+            _state_dict = trainer.accelerator.get_state_dict(trainer.model)
+
+            state_dict = self._get_peft_state(named_params, _state_dict, self.training_args.lora_bias)
+            non_lora_state_dict = self._get_peft_state_non_lora(named_params, _state_dict)
+
+            trainer.model.config.save_pretrained(self.training_args.output_dir)
+            trainer.model.save_pretrained(self.training_args.output_dir, state_dict=state_dict)
+
+            import torch
+            torch.save(non_lora_state_dict, os.path.join(self.training_args.output_dir, 'non_lora_trainables.bin'))
+
+    def _save_full_model(self, trainer):
+        """Save full model."""
+        from src.trainer.train_llm import safe_save_model_for_hf_trainer
+        safe_save_model_for_hf_trainer(trainer=trainer, output_dir=self.training_args.output_dir)
+
+    def _get_peft_state(self, named_params, state_dict, bias):
+        """Get PEFT state dict."""
+        to_return = {}
+        if bias == "none":
+            to_return = {k: state_dict[k] for k in named_params if "lora_" in k}
+        elif bias == "all":
+            to_return = {k: state_dict[k] for k in named_params if "lora_" in k or "bias" in k}
+        elif bias == "lora_only":
+            maybe_lora_bias = {}
+            lora_bias_names = set()
+
+            for k in named_params:
+                if "lora_" in k:
+                    to_return[k] = state_dict[k]
+                    bias_name = k.split("lora_")[0] + "bias"
+                    lora_bias_names.add(bias_name)
+                elif "bias" in k:
+                    maybe_lora_bias[k] = state_dict[k]
+
+            for k, t in maybe_lora_bias.items():
+                if k in lora_bias_names:
+                    to_return[k] = t
+        else:
+            raise NotImplementedError("The specified bias setting is not implemented.")
+
+        return to_return
+
+    def _get_peft_state_non_lora(self, named_params, state_dict, require_grad_only=True):
+        """Get non-LoRA state dict."""
+        to_return = {k: t for k, t in named_params.items() if "lora_" not in k}
+        if require_grad_only:
+            to_return = {k: state_dict[k] for k, t in to_return.items() if t.requires_grad}
+        return to_return
+
+def safe_save_model_for_hf_trainer(trainer: transformers.Trainer, output_dir: str):
     """Collects the state dict and dump to disk."""
-
     if trainer.is_fsdp_enabled:
         trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
 
@@ -151,9 +575,10 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
             for key, value in state_dict.items()
         }
         del state_dict
-        trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
+        trainer._save(output_dir, state_dict=cpu_state_dict)
 
-def find_all_linear_names(model,multimodal_keywords=[]):
+def find_all_linear_names(model, multimodal_keywords=[]):
+    """Find all linear layer names in the model."""
     cls = torch.nn.Linear
     lora_module_names = set()
     for name, module in model.named_modules():
@@ -162,198 +587,37 @@ def find_all_linear_names(model,multimodal_keywords=[]):
         if isinstance(module, cls):
             lora_module_names.add(name)
 
-    if 'lm_head' in lora_module_names: # needed for 16-bit
+    if 'lm_head' in lora_module_names:
         lora_module_names.remove('lm_head')
     return list(lora_module_names)
 
+def print_trainable_parameters(model):
+    """Prints the number of trainable parameters in the model."""
+    trainable_params = 0
+    all_param = 0
+    for name, param in model.named_parameters():
+        all_param += param.numel()
+        if param.requires_grad:
+            trainable_params += param.numel()
+    print(
+        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
+    )
+
 def train():
+    """Main training function - maintains original interface."""
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    training_args.log_level = "info"  # * default is passive(warning)
-    # * build logger
+    # Setup logging
+    training_args.log_level = "info"
     logger = build_logger(__name__, training_args.output_dir + '/train.log')
-    
+
     disable_torch_init()
 
-    if training_args.model_debug:
-        # * do not load checkpoint, load from config
-        logger.info("================= under debug mode ====================")
-
-        config = transformers.AutoConfig.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=
-            "flash_attention_2",
-        )
-
-        model = WaveLLMForCausalLM._from_config(
-            config,
-            torch_dtype=torch.bfloat16,
-        )
-
-        # Load radar encoder in debug mode as well
-        logger.info(f"Loading radar encoder from: {data_args.data_root}")
-        model.get_model().load_wave_encoder(data_args.data_root)
-    else:
-
-        model = WaveLLMForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation = "flash_attention_2",
-        )
-
-        logger.info(f"Loading radar encoder from: {data_args.data_root}")
-        model.get_model().load_wave_encoder(data_args.data_root)
-
-    model.config.use_cache = False
-
-    if training_args.fix_llm:
-        # * This will fix all the parameters
-        logger.info("LLM is fixed. Fix_llm flag is set to True")
-        model.requires_grad_(False)
-        model.get_model().fix_llm = True
-        model.get_model().mm_projection_layers.requires_grad_(True)
-    else:
-        model.get_model().fix_llm = False
-        logger.warning("LLM is trainable. Fix_llm flag is set to False")
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        cache_dir=training_args.cache_dir,
-        model_max_length=training_args.model_max_length,
-        padding_side="right",
-        use_fast=True,
-    )
-
-    conversation_lib.default_conversation = conversation_lib.conv_templates["conv_phi3"]
-
-    print(
-        "detect using lora, the other parameters to config the model trainable weights will be disabled!"
-    )
-
-    lora_config = LoraConfig(
-        r=training_args.lora_r,
-        lora_alpha=training_args.lora_alpha,
-        target_modules=find_all_linear_names(model,training_args.do_not_add_lora_model),
-        lora_dropout=training_args.lora_dropout,
-        bias=training_args.lora_bias,
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, lora_config)
-
-    if training_args.tune_mm_mlp_adapter:
-        model.get_model().mm_projection_layers.requires_grad_(True)
-        logger.info("Point projection layer is trainable.")
-    else:
-        model.get_model().mm_projection_layers.requires_grad_(False)
-        logger.info("Point prejcetion layer is fixed.")
-
-    print('trainable lora weight:')
-    
-    model.initialize_tokenizer_wave_backbone_config(
-            tokenizer=tokenizer,
-            device=training_args.device)
-
-    params_no_grad = [
-        n for n, p in model.named_parameters() if not p.requires_grad
-    ]
-
-    if len(params_no_grad) > 0:
-        if training_args.fsdp is not None and len(training_args.fsdp) > 0:
-            if len(params_no_grad) < 10:
-                print(
-                    '[WARNING] Attempting to use FSDP while {} parameters do not require gradients: {}'
-                    .format(len(params_no_grad), params_no_grad))
-            else:
-                print(
-                    '[WARNING] Attempting to use FSDP while {} parameters do not require gradients: {}...(omitted)'
-                    .format(len(params_no_grad),
-                            ', '.join(params_no_grad[:10])))
-
-            from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
-
-            def patch_FSDP_use_orig_params(func):
-
-                def wrap_func(*args, **kwargs):
-                    use_orig_params = kwargs.pop('use_orig_params', True)
-                    return func(*args,
-                                **kwargs,
-                                use_orig_params=use_orig_params)
-
-                return wrap_func
-
-            FSDP.__init__ = patch_FSDP_use_orig_params(FSDP.__init__)
-
-    data_module = make_object_wave_data_module(tokenizer=tokenizer,
-                                                data_args=data_args)
-
-    # Add SwanLab callback if available
-    callbacks = []
-    if SWANLAB_AVAILABLE:
-        swanlab_callback = SwanLabCallback(
-            project="mmExpert-LLM",
-            experiment_name=f"train-{training_args.output_dir.split('/')[-1]}",
-            config={
-                "model_name": model_args.model_name_or_path,
-                "data_root": data_args.data_root,
-                "split": data_args.split,
-                "learning_rate": training_args.learning_rate,
-                "batch_size": training_args.per_device_train_batch_size,
-                "num_epochs": training_args.num_train_epochs,
-                "lora_r": training_args.lora_r,
-                "lora_alpha": training_args.lora_alpha,
-                "lora_dropout": training_args.lora_dropout,
-            }
-        )
-        callbacks.append(swanlab_callback)
-        logger.info("SwanLab callback added for experiment tracking")
-
-    trainer = WaveLLMTrainer(model=model,
-                              tokenizer=tokenizer,
-                              args=training_args,
-                              callbacks=callbacks,
-                              **data_module)
-
-    if training_args.local_rank == 0 or training_args.local_rank == -1:
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                print(f"{name}: {param.numel()} parameters")  # numel() returns the total number of elements in the parameter tensor
-        print_trainable_parameters(model)
-
-    if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
-        trainer.train(resume_from_checkpoint=True)
-    else:
-        trainer.train()
-    trainer.save_state()
-    if training_args.lora:
-        import os
-        if trainer.is_fsdp_enabled:
-            trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
-        named_params = dict(model.named_parameters())
-        named_params = {k.replace('_fsdp_wrapped_module.', ''):t for k,t in named_params.items()}
-        _state_dict = trainer.accelerator.get_state_dict(trainer.model)
-        
-        if training_args.local_rank == 0 or training_args.local_rank == -1:
-            
-            state_dict = get_peft_state(
-                named_params,
-                _state_dict, 
-                training_args.lora_bias
-            )
-            non_lora_state_dict = get_peft_state_non_lora(
-                named_params,
-                _state_dict
-            )
-
-            model.config.save_pretrained(training_args.output_dir)
-            model.save_pretrained(training_args.output_dir, state_dict=state_dict)
-            torch.save(non_lora_state_dict, os.path.join(training_args.output_dir, 'non_lora_trainables.bin'))
-    else:
-        safe_save_model_for_hf_trainer(trainer=trainer,
-                                    output_dir=training_args.output_dir)
-
+    # Create and run training pipeline
+    pipeline = TrainingPipeline(model_args, data_args, training_args)
+    pipeline.run_training()
 
 if __name__ == "__main__":
     train()
