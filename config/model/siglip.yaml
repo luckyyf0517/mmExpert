@@ -1,36 +1,33 @@
-# SIGLIP model configuration for radar data
-# Sigmoid Loss for Language Image Pre-Training (SigLIP) - https://arxiv.org/abs/2303.15343
-# Uses sigmoid-based loss instead of softmax contrastive loss for improved training stability
+# SigLIP model configuration - identical to CLIP except for loss function
 target: src.model.clip.CLIP
 params:
-  # Training parameters
   max_epochs: 50
-  learning_rate: 1.0e-04           # SigLIP typically works well with lower learning rates
-  temperature: 0.10                # Default temperature (used as logit_scale)
-  use_siglip: true                 # Enable SigLIP loss function
+  learning_rate: 1.0e-04
+  temperature: 0.10
+  use_siglip: true
 
-  # SigLIP-specific loss configuration
-  loss_dist_impl: "bidir"           # Distributed implementation: 'bidir', 'shift', 'reduce', 'gather'
-  local_loss: false                # Whether to compute loss on local rank only
-  gather_with_grad: false          # Whether to gather features with gradients
+  # SigLIP loss configuration
+  loss_dist_impl: "bidir"
+  local_loss: false
+  gather_with_grad: false
 
-  # Encoder configurations
   encoder_configs:
     radar:
-      encoder_type: "radar_encoder_temporal"  # Type of radar encoder to use
-      embed_dim: 768      # Embedding dimension for features
-      dropout: 0.1        # Dropout rate for regularization
+      encoder_type: "radar_encoder_vit"
+      embed_dim: 768
+      dropout: 0.1
+      vit_model: "vit_small_patch16_224.augreg_in21k"
+      pretrained: true
+      freeze_backbone: false
+      use_layer_norm: true
+      patch_size_range: [32, 16]
+      patch_size_other: [16, 16]
+      max_sequence_length: 248
 
     text:
-      model_name: 'sentence-transformers/all-mpnet-base-v2'  # Text encoder model
-      embed_dim: 768      # Match radar embed_dim for compatibility
-      max_length: 77      # Maximum sequence length for text
-      pooling_strategy: 'pooler'  # Pooling strategy for text embeddings
-      freeze_backbone: false      # Whether to freeze the text backbone
-      unfreeze_last_layers: 1     # Number of last layers to unfreeze for fine-tuning
-
-# Key differences from standard CLIP:
-# - Uses sigmoid loss instead of softmax cross-entropy
-# - More stable training with large batch sizes
-# - Better performance in few-shot scenarios
-# - No need for global ground truth labels across distributed training
+      model_name: 'sentence-transformers/all-mpnet-base-v2'
+      embed_dim: 768
+      max_length: 77
+      pooling_strategy: 'pooler'
+      freeze_backbone: false
+      unfreeze_last_layers: 1

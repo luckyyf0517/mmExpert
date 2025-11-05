@@ -44,54 +44,40 @@ def print_core_config(args, log_dir, cfg):
     if cfg.model_cfg.params.get('use_siglip', False):
         print(f"[MODEL TYPE]           : SigLIP")
         print(f"[USE SIGLIP]           : {cfg.model_cfg.params.use_siglip}")
-        print(f"[ADAPTIVE PATCH SIZE]  : {cfg.model_cfg.params.encoder_cfg.adaptive_patch_size}")
-        print(f"[RANGE RESOLUTION]     : {cfg.model_cfg.params.encoder_cfg.range_resolution}")
-        print(f"[DOPPLER RESOLUTION]   : {cfg.model_cfg.params.encoder_cfg.doppler_resolution}")
-        print(f"[AZIMUTH RESOLUTION]   : {cfg.model_cfg.params.encoder_cfg.azimuth_resolution}")
-        print(f"[FUSION METHOD]        : {cfg.model_cfg.params.encoder_cfg.fusion_method}")
-        print(f"[CONTEXT LENGTH]       : {cfg.model_cfg.params.context_length}")
-        print(f"[TRANSFORMER WIDTH]    : {cfg.model_cfg.params.transformer_width}")
-        print(f"[TRANSFORMER HEADS]    : {cfg.model_cfg.params.transformer_heads}")
-        print(f"[TRANSFORMER LAYERS]   : {cfg.model_cfg.params.transformer_layers}")
+        print(f"[LOSS DIST IMPLEMENTATION]: {cfg.model_cfg.params.get('loss_dist_impl', 'N/A')}")
     else:
         print(f"[MODEL TYPE]           : CLIP")
 
     print("\n[TEXT ENCODER CONFIGURATION]")
     print("-" * 50)
 
-    # Extract text encoder configuration based on model type
-    if cfg.model_cfg.params.get('use_siglip', False):
-        text_cfg = cfg.model_cfg.params.text_cfg
+    # Extract text encoder configuration (use encoder_configs for both CLIP and SigLIP)
+    encoder_configs = cfg.model_cfg.params.encoder_configs
+    if 'text' in encoder_configs:
+        text_cfg = encoder_configs.text
         print(f"[MODEL NAME]           : {text_cfg.model_name}")
         print(f"[EMBED DIM]            : {text_cfg.embed_dim}")
-        print(f"[TEXT POOLING]         : {text_cfg.text_pooling}")
-        print(f"[UNFREEZE LAYERS]      : {text_cfg.unfreeze_last_layer_num}")
-    else:
-        # Standard CLIP configuration
-        encoder_configs = cfg.model_cfg.params.encoder_configs
-        if 'text' in encoder_configs:
-            text_cfg = encoder_configs.text
-            print(f"[MODEL NAME]           : {text_cfg.model_name}")
-            print(f"[EMBED DIM]            : {text_cfg.embed_dim}")
-            print(f"[MAX LENGTH]           : {text_cfg.max_length}")
-            print(f"[POOLING STRATEGY]     : {text_cfg.pooling_strategy}")
-            print(f"[FREEZE BACKBONE]      : {text_cfg.freeze_backbone}")
+        print(f"[MAX LENGTH]           : {text_cfg.max_length}")
+        print(f"[POOLING STRATEGY]     : {text_cfg.pooling_strategy}")
+        print(f"[FREEZE BACKBONE]      : {text_cfg.freeze_backbone}")
+        if 'unfreeze_last_layers' in text_cfg:
+            print(f"[UNFREEZE LAYERS]      : {text_cfg.unfreeze_last_layers}")
 
     print("\n[RADAR ENCODER CONFIGURATION]")
     print("-" * 50)
 
-    if cfg.model_cfg.params.get('use_siglip', False):
-        radar_cfg = cfg.model_cfg.params.encoder_cfg
-        print(f"[MODEL NAME]           : {radar_cfg.model_name}")
+    # Standard radar configuration for both CLIP and SigLIP
+    if 'radar' in encoder_configs:
+        radar_cfg = encoder_configs.radar
+        print(f"[ENCODER TYPE]         : {radar_cfg.get('encoder_type', 'N/A')}")
         print(f"[EMBED DIM]            : {radar_cfg.embed_dim}")
-        print(f"[RADAR VIEWS]          : {radar_cfg.radar_views}")
-        print(f"[PRETRAINED]           : {radar_cfg.pretrained}")
-    else:
-        # Standard CLIP radar configuration
-        if 'radar' in encoder_configs:
-            radar_cfg = encoder_configs.radar
-            print(f"[EMBED DIM]            : {radar_cfg.embed_dim}")
-            print(f"[DROPOUT]             : {radar_cfg.dropout}")
+        print(f"[DROPOUT]             : {radar_cfg.dropout}")
+        if 'vit_model' in radar_cfg:
+            print(f"[VIT MODEL]            : {radar_cfg.vit_model}")
+            print(f"[PRETRAINED]           : {radar_cfg.pretrained}")
+            print(f"[FREEZE BACKBONE]      : {radar_cfg.freeze_backbone}")
+            print(f"[PATCH SIZE RANGE]     : {radar_cfg.patch_size_range}")
+            print(f"[MAX SEQUENCE LENGTH]  : {radar_cfg.max_sequence_length}")
 
     print("=" * 50)
     print()
