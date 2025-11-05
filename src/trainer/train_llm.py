@@ -192,13 +192,19 @@ def train():
             config,
             torch_dtype=torch.bfloat16,
         )
+
+        # Load radar encoder in debug mode as well
+        logger.info(f"Loading radar encoder from: {data_args.data_root}")
+        model.get_model().load_wave_encoder(data_args.data_root)
     else:
-        
+
         model = WaveLLMForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
             attn_implementation = "flash_attention_2",
         )
+
+        logger.info(f"Loading radar encoder from: {data_args.data_root}")
         model.get_model().load_wave_encoder(data_args.data_root)
 
     model.config.use_cache = False
