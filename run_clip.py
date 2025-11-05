@@ -4,6 +4,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 import yaml
 import glob
 import shutil
+from termcolor import colored
 import random
 import argparse
 import logging
@@ -93,12 +94,12 @@ if __name__ == '__main__':
 
     # Dry run mode handling
     if args.dry_run:
-        print("🧪 DRY RUN MODE - Configuration Validation")
+        print(colored("[DRY RUN] DRY RUN MODE - Configuration Validation", 'cyan'))
         print("=" * 50)
-        print(f"📋 Model Config: {args.model_config}")
-        print(f"📊 Data Config: {args.data_config}")
-        print(f"🎯 Strategy: {args.strategy}")
-        print(f"🌱 Seed: {args.seed}")
+        print(colored(f"[CONFIG] Model Config: {args.model_config}", 'blue'))
+        print(colored(f"[CONFIG] Data Config: {args.data_config}", 'blue'))
+        print(colored(f"[CONFIG] Strategy: {args.strategy}", 'blue'))
+        print(colored(f"[CONFIG] Seed: {args.seed}", 'blue'))
         print("=" * 50)
 
         # Validate configs without logging
@@ -156,16 +157,16 @@ if __name__ == '__main__':
                     output_shapes = {k: (v.shape if hasattr(v, 'shape') else str(type(v))) for k, v in dummy_logits.items() if hasattr(v, 'shape')}
                     print(f"   - Model output shape: {output_shapes}")
 
-            print("\n🎉 DRY RUN SUCCESSFUL - Configuration is valid!")
-            print("💡 Use this command to start full training:")
-            print(f"   python run_clip.py --model-config {args.model_config} --data-config {args.data_config}")
+            print(colored("\n[SUCCESS] DRY RUN SUCCESSFUL - Configuration is valid!", 'green'))
+            print(colored("[INFO] Use this command to start full training:", 'cyan'))
+            print(colored(f"   python run_clip.py --model-config {args.model_config} --data-config {args.data_config}", 'white'))
 
         except Exception as e:
-            print(f"\n❌ DRY RUN FAILED - Configuration error detected!")
-            print(f"Error: {str(e)}")
-            print("\n🔧 Please check your configuration files:")
-            print(f"   - Model config: {args.model_config}")
-            print(f"   - Data config: {args.data_config}")
+            print(colored(f"\n[ERROR] DRY RUN FAILED - Configuration error detected!", 'red'))
+            print(colored(f"[ERROR] Error: {str(e)}", 'red'))
+            print(colored("\n[INFO] Please check your configuration files:", 'yellow'))
+            print(colored(f"   - Model config: {args.model_config}", 'white'))
+            print(colored(f"   - Data config: {args.data_config}", 'white'))
 
         exit()
 

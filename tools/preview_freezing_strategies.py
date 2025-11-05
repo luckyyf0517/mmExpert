@@ -16,6 +16,7 @@ import sys
 import os
 import yaml
 import glob
+from termcolor import colored
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -109,7 +110,7 @@ def get_layer_freeze_status(encoder):
 def test_strategy(model_name, strategy_name, strategy_params, embed_dim=256):
     """Test a specific freezing strategy."""
     print(f"\n{'='*80}")
-    print(f"🧪 Testing: {strategy_name}")
+    print(colored(f"[TEST] Testing: {strategy_name}", 'yellow'))
     print(f"   Model: {model_name}")
     print(f"   Params: {strategy_params}")
     print(f"{'='*80}\n")
@@ -138,7 +139,7 @@ def test_config_file(config_path):
     """Test a configuration file by loading it and creating the text encoder."""
     config_name = os.path.basename(config_path)
     print(f"\n{'='*80}")
-    print(f"📁 Testing Config: {config_name}")
+    print(colored(f"[CONFIG] Testing Config: {config_name}", 'blue'))
     print(f"   Path: {config_path}")
     print(f"{'='*80}\n")
 
@@ -158,7 +159,7 @@ def test_config_file(config_path):
         print("❌ No model name found in config\n")
         return False
 
-    print(f"📋 Extracted Parameters:")
+    print(colored(f"[PARAMETERS] Extracted Parameters:", 'cyan'))
     print(f"   Model: {model_name}")
     print(f"   Embed Dim: {embed_dim}")
     print(f"   Encoder Params: {encoder_params}\n")
@@ -185,7 +186,7 @@ def test_config_directory(config_dir):
         print(f"❌ No YAML config files found in {config_dir}")
         return
 
-    print(f"📁 Found {len(config_files)} configuration files\n")
+    print(colored(f"[FOUND] Found {len(config_files)} configuration files\n", 'green'))
 
     success_count = 0
     total_count = len(config_files)
@@ -195,7 +196,7 @@ def test_config_directory(config_dir):
             success_count += 1
 
     print(f"\n{'='*80}")
-    print(f"📊 Summary: {success_count}/{total_count} configs tested successfully")
+    print(colored(f"[SUMMARY] Summary: {success_count}/{total_count} configs tested successfully", 'blue'))
     print(f"{'='*80}\n")
 
 
@@ -222,7 +223,7 @@ def run_all_strategies(model_name):
 def test_forward_pass(model_name, strategy_params, embed_dim=256):
     """Test if the encoder works with forward pass."""
     print(f"\n{'='*80}")
-    print(f"🚀 Testing Forward Pass")
+    print(colored(f"[FORWARD] Testing Forward Pass", 'magenta'))
     print(f"   Model: {model_name}")
     print(f"   Strategy: {strategy_params}")
     print(f"{'='*80}\n")
@@ -279,7 +280,7 @@ def test_forward_pass(model_name, strategy_params, embed_dim=256):
 def compare_strategies(model_name):
     """Compare different strategies side by side."""
     print(f"\n{'='*80}")
-    print(f"📊 Strategy Comparison: {model_name}")
+    print(colored(f"[COMPARE] Strategy Comparison: {model_name}", 'cyan'))
     print(f"{'='*80}\n")
     
     strategies = [
@@ -451,8 +452,8 @@ Examples:
             test_forward_pass(model_name, strategy_params)
     else:
         # Default: run all strategies
-        print("💡 Tip: Use --compare for side-by-side comparison, or --all for detailed tests")
-        print("💡 To test config files, use --config or --config-dir")
+        print(colored("[TIP] Tip: Use --compare for side-by-side comparison, or --all for detailed tests", 'yellow'))
+        print(colored("[TIP] To test config files, use --config or --config-dir", 'yellow'))
         run_all_strategies(model_name)
 
 

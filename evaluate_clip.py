@@ -20,6 +20,7 @@ import argparse
 from pathlib import Path
 import yaml
 import glob
+from termcolor import colored
 
 # Add project root to path
 sys.path.append('/root/autodl-tmp/mmExpert')
@@ -38,11 +39,15 @@ class CLIPEvaluator:
         self.version_path = version_path
         self.debug = debug
         self.override_batch_size = batch_size
+        self.version_dir = None  # Store resolved version directory path
 
         # Handle version path option
         if self.version_path is not None:
             self.model_path, self.config_dir = self.discover_from_version(self.version_path)
             self.config_path = None  # Will be determined by config discovery
+        elif self.model_path is not None:
+            # Try to discover version directory from model_path
+            self.version_dir = self.discover_version_from_model_path(self.model_path)
 
         # Auto-discover config if not provided
         if self.config_path is None:
@@ -58,7 +63,7 @@ class CLIPEvaluator:
 
     def discover_from_version(self, version_path):
         """Discover model and config paths from version directory"""
-        print(f"🔍 Discovering files from version path: {version_path}")
+        print(colored(f"[DISCOVER] Discovering files from version path: {version_path}", 'cyan'))
 
         # Resolve version path - could be experiment name or full path
         if not os.path.isabs(version_path) and '/' not in version_path:
@@ -67,6 +72,9 @@ class CLIPEvaluator:
 
         if not os.path.exists(version_path):
             raise FileNotFoundError(f"Version directory not found: {version_path}")
+
+        # Store resolved version directory path
+        self.version_dir = os.path.abspath(version_path)
 
         # Find checkpoint directory
         checkpoints_dir = os.path.join(version_path, 'checkpoints')
@@ -77,7 +85,7 @@ class CLIPEvaluator:
         last_ckpt = os.path.join(checkpoints_dir, 'last.ckpt')
         if os.path.exists(last_ckpt):
             model_path = last_ckpt
-            print(f"✅ Found last checkpoint: {model_path}")
+            print(colored(f"[SUCCESS] Found last checkpoint: {model_path}", 'green'))
         else:
             # Find any checkpoint file
             ckpt_files = [f for f in os.listdir(checkpoints_dir) if f.endswith('.ckpt')]
@@ -87,7 +95,7 @@ class CLIPEvaluator:
             # Sort by epoch number if possible, otherwise use the first one
             ckpt_files.sort()
             model_path = os.path.join(checkpoints_dir, ckpt_files[-1])
-            print(f"✅ Found checkpoint: {model_path}")
+            print(colored(f"[SUCCESS] Found checkpoint: {model_path}", 'green'))
 
         # Check for config directory in multiple locations
         version_name = os.path.basename(version_path)
@@ -95,29 +103,56 @@ class CLIPEvaluator:
         # Priority 1: config directory inside version (new format)
         config_dir = os.path.join(version_path, 'config')
         if os.path.exists(config_dir) and os.path.isdir(config_dir):
-            print(f"✅ Found config directory in version: {config_dir}")
+            print(colored(f"[SUCCESS] Found config directory in version: {config_dir}", 'green'))
             return model_path, config_dir
 
         # Priority 2: config/version_name (old format)
         config_dir = os.path.join('config', version_name)
         if os.path.exists(config_dir) and os.path.isdir(config_dir):
-            print(f"✅ Found config directory in config/: {config_dir}")
+            print(colored(f"[SUCCESS] Found config directory in config/: {config_dir}", 'green'))
             return model_path, config_dir
 
         # Priority 3: Check for model_config.yaml directly in version directory
         model_config_in_version = os.path.join(version_path, 'model_config.yaml')
         if os.path.exists(model_config_in_version):
-            print(f"✅ Found model_config.yaml in version directory: {version_path}")
+            print(colored(f"[SUCCESS] Found model_config.yaml in version directory: {version_path}", 'green'))
             return model_path, version_path
 
         raise FileNotFoundError(f"Config directory not found in any expected location for version: {version_name}")
+
+    def discover_version_from_model_path(self, model_path):
+        """Discover version directory from model checkpoint path"""
+        model_dir = os.path.dirname(os.path.abspath(model_path))
+
+        # Extract version directory from path
+        # Path could be: log/version/checkpoints/model.ckpt or log/version/model.ckpt (old format)
+        if os.path.basename(model_dir) == 'checkpoints':
+            # New format: log/version/checkpoints/model.ckpt
+            version_dir = os.path.dirname(model_dir)
+        else:
+            # Old format: log/version/model.ckpt
+            # Check if parent directory looks like a log directory
+            parent_dir = os.path.dirname(model_dir)
+            if os.path.basename(parent_dir) in ['log', 'logs'] or 'experiment' in os.path.basename(parent_dir).lower():
+                version_dir = model_dir
+            else:
+                # If not in standard structure, use model_dir as version_dir
+                version_dir = model_dir
+
+        # Verify version directory exists
+        if os.path.exists(version_dir) and os.path.isdir(version_dir):
+            print(colored(f"[SUCCESS] Discovered version directory from model path: {version_dir}", 'green'))
+            return os.path.abspath(version_dir)
+        else:
+            print(colored(f"[WARNING] Could not determine version directory from model path, using model directory: {model_dir}", 'yellow'))
+            return os.path.abspath(model_dir)
 
     def discover_config_path(self):
         """Auto-discover and merge config files based on checkpoint location"""
         # If we have a config_dir from version discovery, use it
         if hasattr(self, 'config_dir') and self.config_dir is not None:
             config_dir = self.config_dir
-            print(f"✅ Using pre-discovered config directory: {config_dir}")
+            print(colored(f"[SUCCESS] Using pre-discovered config directory: {config_dir}", 'green'))
         else:
             # Fall back to auto-discovery based on checkpoint location
             model_dir = os.path.dirname(self.model_path)
@@ -185,13 +220,13 @@ class CLIPEvaluator:
         if has_model_config and has_data_config:
             return self.merge_configs(model_config, data_config)
         elif has_single_config:
-            print(f"Auto-discovered config: {single_config}")
+            print(colored(f"[CONFIG] Auto-discovered config: {single_config}", 'blue'))
             return single_config
         elif has_model_config:
-            print(f"Auto-discovered model config: {model_config}")
+            print(colored(f"[CONFIG] Auto-discovered model config: {model_config}", 'blue'))
             return model_config
         else:  # has_data_config only
-            print(f"Auto-discovered data config: {data_config}")
+            print(colored(f"[CONFIG] Auto-discovered data config: {data_config}", 'blue'))
             return data_config
 
     def merge_configs(self, model_config_path, data_config_path):
@@ -216,16 +251,16 @@ class CLIPEvaluator:
         yaml.dump(merged_config, temp_file, default_flow_style=False)
         temp_file.close()
 
-        print(f"Auto-discovered and merged configs:")
-        print(f"  Model config: {model_config_path}")
-        print(f"  Data config: {data_config_path}")
-        print(f"  Merged config: {temp_file.name}")
+        print(colored(f"[CONFIG] Auto-discovered and merged configs:", 'blue'))
+        print(colored(f"  Model config: {model_config_path}", 'white'))
+        print(colored(f"  Data config: {data_config_path}", 'white'))
+        print(colored(f"  Merged config: {temp_file.name}", 'white'))
 
         return temp_file.name
 
     def load_model(self):
         """Load trained CLIP model"""
-        print(f"Loading model from {self.model_path}")
+        print(colored(f"[LOAD] Loading model from {self.model_path}", 'cyan'))
 
         # Load config using YAML loader
         config = load_config(self.config_path)
@@ -347,8 +382,8 @@ class CLIPEvaluator:
         # Debug output for this batch
         if self.debug and captions is not None:
             print(f"\n" + "="*80)
-            print(f"🔍 DEBUG - Batch {batch_idx} (Size: {batch_size})")
-            print(f"="*80)
+            print(colored(f"[DEBUG] DEBUG - Batch {batch_idx} (Size: {batch_size})", 'yellow'))
+            print(colored("="*80, 'white'))
 
         # Evaluate Radar→Text retrieval
         for i in range(batch_size):
@@ -366,14 +401,14 @@ class CLIPEvaluator:
                 predicted_caption = captions[predicted_idx]
                 similarity_score = similarity_matrix[i, predicted_idx].item()
 
-                print(f"\n📊 Sample {i:2d}:")
-                print(f"   ✅ Correct Caption: {correct_caption}")
-                print(f"   🎯 Predicted Caption: {predicted_caption}")
-                print(f"   📈 Similarity Score: {similarity_score:.4f}")
-                print(f"   🏆 Rank of Correct: {rank}")
+                print(colored(f"\n[SAMPLE] Sample {i:2d}:", 'cyan'))
+                print(colored(f"   [CORRECT] Correct Caption: {correct_caption}", 'green'))
+                print(colored(f"   [PREDICTED] Predicted Caption: {predicted_caption}", 'blue'))
+                print(colored(f"   [SCORE] Similarity Score: {similarity_score:.4f}", 'magenta'))
+                print(colored(f"   [RANK] Rank of Correct: {rank}", 'yellow'))
 
                 # Show top 3 predictions
-                print(f"   🔝 Top 3 Predictions:")
+                print(colored(f"   [TOP3] Top 3 Predictions:", 'cyan'))
                 for j in range(min(3, batch_size)):
                     pred_idx = sorted_indices[j].item()
                     pred_caption = captions[pred_idx]
@@ -529,7 +564,7 @@ class CLIPEvaluator:
         results, captions = self.extract_features()
 
         # Print batch-wise evaluation results
-        print(f"\n📊 Batch-wise Evaluation Results (Batch Size: {self.test_dataloader.batch_size}):")
+        print(colored(f"\n[RESULTS] Batch-wise Evaluation Results (Batch Size: {self.test_dataloader.batch_size}):", 'blue'))
         print(f"  Radar → Text:")
         print(f"    Recall@1:  {results['radar_to_text_recall@1']:.4f}")
         print(f"    Recall@5:  {results['radar_to_text_recall@5']:.4f}")
@@ -544,7 +579,7 @@ class CLIPEvaluator:
         print(f"    MRR:        {results['text_to_radar_mrr']:.4f}")
         print(f"    Median Rank: {results['text_to_radar_median_rank']:.1f}")
 
-        print(f"\n📈 Similarity Analysis:")
+        print(colored(f"\n[ANALYSIS] Similarity Analysis:", 'magenta'))
         print(f"  Correct pairs (diagonal):")
         print(f"    Mean: {results['diag_similarity_mean']:.4f} ± {results['diag_similarity_std']:.4f}")
         print(f"  Incorrect pairs (off-diagonal):")
@@ -578,8 +613,8 @@ def main():
 
     parser.add_argument('--config_path', type=str, default=None,
                         help='Path to model configuration file (YAML format). If not specified, will auto-discover in checkpoint directory')
-    parser.add_argument('--output_path', type=str, default='tmp/clip_evaluation_results.json',
-                        help='Path to save evaluation results')
+    parser.add_argument('--output_path', type=str, default=None,
+                        help='Path to save evaluation results. If not specified, will auto-save to version_dir/results.json when version directory can be discovered')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use for evaluation')
     parser.add_argument('--debug', action='store_true',
@@ -599,11 +634,23 @@ def main():
         batch_size=args.batch_size
     )
 
+    # Determine output path
+    if args.output_path is None:
+        if evaluator.version_dir is not None:
+            # Use version directory if it can be discovered (from --version or --model_path)
+            output_path = os.path.join(evaluator.version_dir, 'results.json')
+            print(colored(f"[PATH] Auto-setting output path to: {output_path}", 'cyan'))
+        else:
+            # Default fallback
+            output_path = 'tmp/clip_evaluation_results.json'
+    else:
+        output_path = args.output_path
+
     # Run evaluation
-    results = evaluator.run_evaluation(output_path=args.output_path)
+    results = evaluator.run_evaluation(output_path=output_path)
 
     if not args.debug:  # Only show summary if not in debug mode (debug shows detailed info)
-        print(f"\n📊 Final Results Summary:")
+        print(colored(f"\n[SUMMARY] Final Results Summary:", 'green'))
         for key, value in results.items():
             if isinstance(value, float):
                 print(f"  {key}: {value:.4f}")

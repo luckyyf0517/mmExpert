@@ -14,6 +14,7 @@ Usage:
 import argparse
 import sys
 import os
+from termcolor import colored
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -46,7 +47,7 @@ def count_parameters(module):
 def analyze_model_structure(model_name, verbose=False):
     """Analyze and display the structure of a text encoder model."""
     print(f"\n{'='*80}")
-    print(f"📊 Analyzing Model: {model_name}")
+    print(colored(f"[ANALYZE] Analyzing Model: {model_name}", 'cyan'))
     print(f"{'='*80}\n")
     
     try:
@@ -66,7 +67,7 @@ def analyze_model_structure(model_name, verbose=False):
         return
     
     # 1. Overall Statistics
-    print("📈 Overall Statistics")
+    print(colored("[STATISTICS] Overall Statistics", 'blue'))
     print("-" * 80)
     total_params, trainable_params = count_parameters(model)
     print(f"Total Parameters: {total_params:,}")
@@ -83,7 +84,7 @@ def analyze_model_structure(model_name, verbose=False):
     print()
     
     # 2. Layer Structure Overview
-    print("🏗️  Layer Structure Overview")
+    print(colored("[STRUCTURE] Layer Structure Overview", 'magenta'))
     print("-" * 80)
     
     layer_info = []
@@ -112,7 +113,7 @@ def analyze_model_structure(model_name, verbose=False):
     
     # 3. Detailed Transformer Layers
     if hasattr(model, 'encoder') and hasattr(model.encoder, 'layer'):
-        print("🔍 Transformer Layers Breakdown")
+        print(colored("[LAYERS] Transformer Layers Breakdown", 'yellow'))
         print("-" * 80)
         
         layers_data = []
@@ -130,7 +131,7 @@ def analyze_model_structure(model_name, verbose=False):
         print()
     
     # 4. Freezing Recommendations
-    print("💡 Freezing Strategy Recommendations (New unfreeze_last_layers Option)")
+    print(colored("[RECOMMENDATIONS] Freezing Strategy Recommendations (New unfreeze_last_layers Option)", 'green'))
     print("-" * 80)
     
     if hasattr(model.config, 'num_hidden_layers'):
@@ -148,7 +149,7 @@ def analyze_model_structure(model_name, verbose=False):
                       headers=['Dataset Size', 'Config (Most Intuitive)', 'Description'], 
                       tablefmt='grid'))
         
-        print("\n💡 Alternative: freeze_layers (need to know total layer count)")
+        print(colored("\n[ALTERNATIVE] Alternative: freeze_layers (need to know total layer count)", 'cyan'))
         alt_recommendations = [
             ["Small Dataset", f"freeze_layers: {num_layers - 1}", f"Freeze first {num_layers - 1} layers"],
             ["Medium Dataset", f"freeze_layers: {num_layers // 2}", f"Freeze first {num_layers // 2} layers"],
@@ -161,7 +162,7 @@ def analyze_model_structure(model_name, verbose=False):
     
     # 5. Detailed Parameter List (verbose mode)
     if verbose:
-        print("📝 Detailed Parameter List")
+        print(colored("[PARAMETERS] Detailed Parameter List", 'white'))
         print("-" * 80)
         
         param_list = []
@@ -179,7 +180,7 @@ def analyze_model_structure(model_name, verbose=False):
         print()
     
     # 6. Example Configuration Usage
-    print("📋 Example Configuration Usage")
+    print(colored("[CONFIG] Example Configuration Usage", 'blue'))
     print("-" * 80)
     
     examples = []
@@ -206,7 +207,7 @@ def analyze_model_structure(model_name, verbose=False):
     print()
     
     # 7. Test a sample input
-    print("🧪 Testing Model with Sample Input")
+    print(colored("[TEST] Testing Model with Sample Input", 'yellow'))
     print("-" * 80)
     
     try:
@@ -231,7 +232,7 @@ def analyze_model_structure(model_name, verbose=False):
 def list_common_models():
     """List common text encoder models."""
     print("\n" + "="*80)
-    print("📚 Common Text Encoder Models")
+    print(colored("[MODELS] Common Text Encoder Models", 'magenta'))
     print("="*80 + "\n")
     
     data = [[alias, model_name] for alias, model_name in COMMON_MODELS.items()]

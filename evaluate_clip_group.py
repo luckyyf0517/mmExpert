@@ -18,6 +18,7 @@ import yaml
 import argparse
 from pathlib import Path
 import glob
+from termcolor import colored
 from datetime import datetime
 from tqdm import tqdm
 import pandas as pd
@@ -38,7 +39,7 @@ class CLIPGroupEvaluator:
 
         # Discover all versions
         self.versions = self.discover_versions()
-        print(f"🔍 Discovered {len(self.versions)} versions in {group_dir}")
+        print(colored(f"[DISCOVER] Discovered {len(self.versions)} versions in {group_dir}", 'cyan'))
 
         # Results storage
         self.results = {}
@@ -114,9 +115,9 @@ class CLIPGroupEvaluator:
 
         try:
             if self.verbose:
-                print(f"\n📊 Evaluating version: {version_name}")
+                print(colored(f"\n[EVALUATE] Evaluating version: {version_name}", 'blue'))
             else:
-                print(f"🔄 Evaluating: {version_name}", end=' ... ')
+                print(colored(f"[PROGRESS] Evaluating: {version_name}", 'yellow'), end=' ... ')
 
             # Find last.ckpt or fallback to other checkpoint
             checkpoints_dir = version['checkpoints_dir']
@@ -166,7 +167,7 @@ class CLIPGroupEvaluator:
 
     def evaluate_all(self):
         """Evaluate all models in the group"""
-        print(f"\n🚀 Starting group evaluation for {len(self.versions)} models...")
+        print(colored(f"\n[START] Starting group evaluation for {len(self.versions)} models...", 'green'))
         print("=" * 80)
 
         for version in self.versions:
@@ -214,12 +215,12 @@ class CLIPGroupEvaluator:
         table_data.sort(key=lambda x: float(x[1]), reverse=True)
 
         # Display table
-        print("\n📊 CLIP MODEL COMPARISON RESULTS")
+        print(colored("\n[RESULTS] CLIP MODEL COMPARISON RESULTS", 'cyan'))
         print("=" * 100)
         print(tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3f"))
 
         # Summary statistics
-        print("\n📈 SUMMARY STATISTICS")
+        print(colored("\n[STATISTICS] SUMMARY STATISTICS", 'blue'))
         print("-" * 50)
 
         all_r2t_r1 = [data['results']['radar_to_text_recall@1'] for data in successful_results.values()]
@@ -247,7 +248,7 @@ class CLIPGroupEvaluator:
         # Find best performing model
         best_model = max(successful_results.items(),
                         key=lambda x: x[1]['results']['radar_to_text_recall@1'])
-        print(f"\n🏆 Best performing model: {best_model[0]}")
+        print(colored(f"\n[BEST] Best performing model: {best_model[0]}", 'green'))
         print(f"   Radar→Text Recall@1: {best_model[1]['results']['radar_to_text_recall@1']:.3f}")
         print(f"   Text→Radar Recall@1: {best_model[1]['results']['text_to_radar_recall@1']:.3f}")
 
@@ -274,7 +275,7 @@ class CLIPGroupEvaluator:
         with open(output_path, 'w') as f:
             json.dump(results_data, f, indent=2)
 
-        print(f"\n💾 Detailed results saved to: {output_path}")
+        print(colored(f"\n[SAVE] Detailed results saved to: {output_path}", 'magenta'))
 
 
 def main():
