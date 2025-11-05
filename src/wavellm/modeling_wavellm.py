@@ -30,10 +30,10 @@ class WaveLLM(Phi3Model):
         """Initialize WaveLLM model with radar encoder support."""
         super(WaveLLM, self).__init__(config)
 
-        # Initialize dimension parameters
+        # Initialize dimension parameters (try to get from encoder config if available)
         self._initialize_dimensions(config)
 
-        # Initialize projection layers (will be rebuilt after encoder loading)
+        # Initialize projection layers with correct dimensions
         self._initialize_projection_layers()
 
         # Initialize wave token
@@ -45,13 +45,83 @@ class WaveLLM(Phi3Model):
         self.post_init()
 
     def _initialize_dimensions(self, config):
-        """Initialize dimension parameters with strict validation."""
-        self.mmwave_latent_dim = getattr(config, 'mmwave_latent_dim', getattr(config, 'vae_latent_dim', 512))
+        """Initialize dimension parameters with strict validation.
+        
+        Tries to get embed_dim from encoder config if encoder_path is provided in config.
+        This avoids the need to rebuild projection layers later.
+        """
+        # Try to get embed_dim from encoder config if encoder_path is available
+        encoder_path = getattr(config, 'encoder_path', None)
+        if encoder_path is not None and os.path.exists(encoder_path):
+            try:
+                embed_dim = self._get_embed_dim_from_encoder_config(encoder_path)
+                self.mmwave_latent_dim = embed_dim
+                self.logger = getattr(self, 'logger', None)
+                if self.logger:
+                    self.logger.debug(f"Got embed_dim={embed_dim} from encoder config at {encoder_path}")
+            except Exception as e:
+                # Fallback to default if config reading fails
+                self.mmwave_latent_dim = getattr(config, 'mmwave_latent_dim', getattr(config, 'vae_latent_dim', 512))
+                self.logger = getattr(self, 'logger', None)
+                if self.logger:
+                    self.logger.warning(f"Failed to read encoder config from {encoder_path}: {e}. Using default dimension.")
+        else:
+            # Use config value or default
+            self.mmwave_latent_dim = getattr(config, 'mmwave_latent_dim', getattr(config, 'vae_latent_dim', 512))
 
         if not isinstance(self.mmwave_latent_dim, int) or self.mmwave_latent_dim <= 0:
             raise ValueError(f"mmwave_latent_dim must be a positive integer, got {self.mmwave_latent_dim}")
 
         self.vae_latent_dim = self.mmwave_latent_dim  # Keep for backward compatibility
+    
+    @staticmethod
+    def _get_embed_dim_from_encoder_config(encoder_path: str) -> int:
+        """Get embed_dim from encoder config file without loading the full encoder.
+        
+        Args:
+            encoder_path: Path to encoder directory containing radar_encoder_config.yaml
+            
+        Returns:
+            embed_dim from the encoder configuration
+        """
+        config_path = os.path.join(encoder_path, 'radar_encoder_config.yaml')
+        if not os.path.isfile(config_path):
+            raise FileNotFoundError(f"Radar encoder config not found: {config_path}")
+        
+        # Load YAML config
+        try:
+            with open(config_path, 'r') as f:
+                encoder_config = yaml.safe_load(f)
+        except yaml.constructor.ConstructorError:
+            from yaml import UnsafeLoader
+            with open(config_path, 'r') as f:
+                encoder_config = yaml.load(f, Loader=UnsafeLoader)
+        
+        if encoder_config is None:
+            raise ValueError(f"YAML config is empty: {config_path}")
+        
+        # Extract radar encoder config
+        radar_cfg = encoder_config.get('radar_encoder_cfg')
+        if radar_cfg is None:
+            raise ValueError("radar_encoder_cfg not found in configuration")
+        
+        # Convert to dict if needed
+        if hasattr(radar_cfg, 'to_dict'):
+            radar_cfg = radar_cfg.to_dict()
+        elif hasattr(radar_cfg, 'dict'):
+            radar_cfg = radar_cfg.dict()
+        elif not isinstance(radar_cfg, dict):
+            raise ValueError(f"radar_cfg must be dict-like, got {type(radar_cfg)}")
+        
+        # Get embed_dim
+        if 'embed_dim' not in radar_cfg:
+            raise ValueError("embed_dim is required in radar config")
+        
+        embed_dim = radar_cfg['embed_dim']
+        if not isinstance(embed_dim, int) or embed_dim <= 0:
+            raise ValueError(f"embed_dim must be positive integer, got {embed_dim}")
+        
+        return embed_dim
 
     def _initialize_projection_layers(self):
         """Initialize projection layers with current dimensions."""
@@ -229,8 +299,12 @@ class WaveLLM(Phi3Model):
         actual_embed_dim = encoder.embed_dim
         self._actual_embed_dim = actual_embed_dim
 
+        # Verify dimensions match (should be ensured by encoder_path in config during initialization)
         if actual_embed_dim != self.mmwave_latent_dim:
-            self._rebuild_projection_layers(actual_embed_dim)
+            raise ValueError(
+                f"Encoder embed_dim ({actual_embed_dim}) doesn't match projection layer input dim "
+                f"({self.mmwave_latent_dim}). Ensure encoder_path is set in config during model initialization."
+            )
 
     def _log_encoder_loading_success(self, encoder_version_path: str, radar_cfg: Dict[str, Any]) -> None:
         """Log successful encoder loading."""
@@ -296,27 +370,6 @@ class WaveLLM(Phi3Model):
 
         return EncoderWrapper(encoder).eval()
 
-
-    def _rebuild_projection_layers(self, actual_embed_dim: int) -> None:
-        """Rebuild projection layers with new embed dimension."""
-        # Update dimensions
-        self.mmwave_latent_dim = actual_embed_dim
-        self.vae_latent_dim = actual_embed_dim
-
-        # Get dtype from existing parameters to maintain consistency
-        model_dtype = next(self.parameters()).dtype if list(self.parameters()) else torch.float32
-
-        # Rebuild projection layers
-        self.mm_projection_layers = nn.Linear(actual_embed_dim, self.config.hidden_size)
-
-        # Initialize weights
-        nn.init.xavier_uniform_(self.mm_projection_layers.weight)
-        if self.mm_projection_layers.bias is not None:
-            nn.init.constant_(self.mm_projection_layers.bias, 0)
-        
-        # Convert to model dtype immediately to avoid FSDP dtype mismatch
-        self.mm_projection_layers = self.mm_projection_layers.to(dtype=model_dtype)
-
     def get_encoder_info(self) -> Dict[str, Any]:
         """Get information about the loaded encoder."""
         return {
@@ -338,9 +391,18 @@ class WaveLLM(Phi3Model):
         Returns:
             wave_features: [B, N, hidden_size] projected features
         """
+        # Get device from model parameters
+        device = next(self.parameters()).device
+        
         if radar_data is not None:
+            # Move radar_data tensors to the same device as the model
+            radar_data = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                         for k, v in radar_data.items()}
             features = self.wave_encoder(radar_data=radar_data, return_sequence=True)
         elif input_wave_embeds is not None:
+            # Ensure input_wave_embeds is on the correct device
+            if isinstance(input_wave_embeds, torch.Tensor) and input_wave_embeds.device != device:
+                input_wave_embeds = input_wave_embeds.to(device)
             features = self.wave_encoder(input_wave_embeds=input_wave_embeds, return_sequence=True)
         elif input_wave_tokens is not None:
             raise ValueError("input_wave_tokens is not supported, use radar_data instead")
@@ -480,7 +542,7 @@ class WaveLLM(Phi3Model):
         # Process wave data only in training or multi-token inference
         should_process_wave = (input_ids.shape[1] != 1) or self.training
         if should_process_wave:
-            radar_data = kwargs.get('radar_data', None)
+            radar_data = kwargs.pop('radar_data', None)
             has_wave_data = radar_data is not None or input_wave_embeds is not None or input_wave_tokens is not None
             
             if has_wave_data:
@@ -572,9 +634,6 @@ class WaveLLMForCausalLM(Phi3ForCausalLM):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         position_ids = None
         
-        # Extract radar_data from kwargs to pass to model
-        radar_data = kwargs.get('radar_data', None)
-
         outputs = self.model(input_ids=input_ids,
                              input_wave_tokens=input_wave_tokens,
                              input_wave_embeds=input_wave_embeds,
@@ -586,7 +645,6 @@ class WaveLLMForCausalLM(Phi3ForCausalLM):
                              output_hidden_states=output_hidden_states,
                              return_dict=return_dict,
                              position_ids=position_ids,
-                             radar_data=radar_data,
                              **kwargs)
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)

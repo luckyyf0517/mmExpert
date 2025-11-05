@@ -131,9 +131,10 @@ class ModelInitializer:
     Handles model initialization with improved error handling and logging.
     """
 
-    def __init__(self, model_args: ModelArguments, training_args: TrainingArguments):
+    def __init__(self, model_args: ModelArguments, training_args: TrainingArguments, data_args=None):
         self.model_args = model_args
         self.training_args = training_args
+        self.data_args = data_args
         self.logger = build_logger("ModelInitializer", "logs/model_init.log")
 
     def initialize_model(self):
@@ -155,6 +156,9 @@ class ModelInitializer:
             cache_dir=self.training_args.cache_dir,
             attn_implementation="flash_attention_2",
         )
+        # Set encoder_path in config if available
+        if self.data_args is not None and hasattr(self.data_args, 'data_root'):
+            config.encoder_path = self.data_args.data_root
         model = WaveLLMForCausalLM._from_config(
             config,
             dtype=torch.bfloat16,
@@ -164,8 +168,19 @@ class ModelInitializer:
     def _initialize_production_model(self):
         """Initialize model in production mode."""
         self.logger.info(f"Initializing model from {self.model_args.model_name_or_path}")
+        # Load config first to set encoder_path
+        config = transformers.AutoConfig.from_pretrained(
+            self.model_args.model_name_or_path,
+            cache_dir=self.training_args.cache_dir,
+            attn_implementation="flash_attention_2",
+        )
+        # Set encoder_path in config if available (before model initialization)
+        if self.data_args is not None and hasattr(self.data_args, 'data_root'):
+            config.encoder_path = self.data_args.data_root
+            self.logger.debug(f"Set encoder_path in config: {self.data_args.data_root}")
         model = WaveLLMForCausalLM.from_pretrained(
             self.model_args.model_name_or_path,
+            config=config,
             cache_dir=self.training_args.cache_dir,
             attn_implementation="flash_attention_2",
             dtype=torch.bfloat16,
@@ -436,7 +451,7 @@ class TrainingPipeline:
         self.logger = build_logger("TrainingPipeline", "logs/training.log")
 
         # Initialize managers
-        self.model_initializer = ModelInitializer(model_args, training_args)
+        self.model_initializer = ModelInitializer(model_args, training_args, data_args)
         self.tokenizer_manager = TokenizerManager(model_args, training_args)
         self.lora_manager = LoRAManager(training_args)
         self.wave_token_manager = WaveTokenManager(training_args)
