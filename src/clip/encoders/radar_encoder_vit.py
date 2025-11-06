@@ -195,9 +195,18 @@ class RadarEncoderViT(BaseEncoder):
         # Get ViT feature dimension from the first encoder
         sample_encoder = list(self.view_encoders.values())[0]
         vit_embed_dim = sample_encoder.embed_dim
+        
+        # Ensure vit_embed_dim is an integer
+        if not isinstance(vit_embed_dim, int):
+            raise TypeError(f"vit_embed_dim must be int, got {type(vit_embed_dim)}: {vit_embed_dim}")
 
         # Fusion layer to combine multi-view features
         total_views = len(input_dims)
+        
+        # Ensure embed_dim is an integer
+        if not isinstance(embed_dim, int):
+            raise TypeError(f"embed_dim must be int, got {type(embed_dim)}: {embed_dim}")
+        
         self.fusion_layer = nn.Linear(vit_embed_dim * total_views, embed_dim)
 
         # Projection layer to handle sequence features - only create if needed
@@ -234,12 +243,18 @@ class RadarEncoderViT(BaseEncoder):
                 nn.init.constant_(self.sequence_projection.bias, 0)
         return self.sequence_projection
 
-    def _create_view_encoder(self, vit_model: str, patch_size: Tuple[int, int],
+    def _create_view_encoder(self, vit_model: str, patch_size,
                            target_size: Tuple[int, int], freeze_backbone: bool,
                            max_sequence_length: int) -> nn.Module:
         """Create Vision Transformer encoder for a single radar view."""
-        # Convert patch_size to tuple
-        patch_size_tuple = (patch_size, patch_size)
+        # Convert patch_size to tuple if it's a list
+        if isinstance(patch_size, list):
+            patch_size_tuple = tuple(patch_size)
+        elif isinstance(patch_size, tuple):
+            patch_size_tuple = patch_size
+        else:
+            # Single value, create square patch
+            patch_size_tuple = (patch_size, patch_size)
         return ViewEncoder(vit_model, patch_size_tuple, target_size, freeze_backbone, max_sequence_length)
 
     def _initialize_parameters(self) -> None:

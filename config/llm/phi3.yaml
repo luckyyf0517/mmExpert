@@ -18,6 +18,7 @@ model_cfg:
     lora_alpha: 32
     lora_dropout: 0.05
     bias: "none"
+    target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
   # Conversation and wave token configuration
   conversation_template: "conv_phi3"  # Use Phi3 conversation template

@@ -116,7 +116,9 @@ class WaveLLMTrainer(pl.LightningModule):
 
         # Create encoder instance
         from src.clip.encoders import get_encoder
-        encoder = get_encoder(encoder_type)(radar_cfg)
+        # Convert EasyDict to dict and expand with **kwargs
+        radar_cfg_dict = dict(radar_cfg)
+        encoder = get_encoder(encoder_type)(**radar_cfg_dict)
 
         # Load weights
         weights_path = os.path.join(encoder_path, 'radar_encoder.pth')
@@ -142,6 +144,7 @@ class WaveLLMTrainer(pl.LightningModule):
             lora_alpha=self.cfg.peft_config.lora_alpha,
             lora_dropout=self.cfg.peft_config.lora_dropout,
             bias=self.cfg.peft_config.bias,
+            target_modules=self.cfg.peft_config.get('target_modules', None),
         )
 
         self.model = get_peft_model(self.model, peft_config)
@@ -220,8 +223,13 @@ class WaveLLMTrainer(pl.LightningModule):
             }
 
             # Forward through radar encoder
+            # Convert dict to ModalityData format
+            from src.clip.core.base import ModalityData, ModalityType
+            modality_data = ModalityData(data=encoder_input, modality=ModalityType.RADAR)
+            
             with torch.no_grad():  # Radar encoder is frozen
-                encoder_output = self.radar_encoder(encoder_input)
+                result = self.radar_encoder.encode(modality_data, return_sequence=True)
+                encoder_output = result.features  # [1, T, D]
 
             # The encoder should output [1, T, D] features
             features = encoder_output.squeeze(0)  # Remove batch dim -> [T, D]
