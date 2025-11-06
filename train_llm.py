@@ -2,12 +2,16 @@
 
 import argparse
 import os
+import warnings
 from datetime import datetime
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DeepSpeedStrategy
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from swanlab.integration.pytorch_lightning import SwanLabLogger
 import swanlab
+
+# Ignore SwanLab warning about experiment already in progress
+warnings.filterwarnings('ignore', message='.*There is a swanlab experiment already in progress.*')
 
 from easydict import EasyDict
 from src.llm.utils.config_loader import load_yaml_config
@@ -43,6 +47,8 @@ def parse_args():
                         help='Run in test mode (no training)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug mode to display Question/Answer/Prediction for each batch')
 
     # DeepSpeed args
     parser = add_deepspeed_args(parser)
@@ -122,17 +128,19 @@ def main():
     model_cfg_dict = dict(cfg.model_cfg)
     model_cfg_dict['training'] = EasyDict(cfg.training)
     model_cfg_with_training = EasyDict(model_cfg_dict)
+    # Add debug flag to model config
+    model_cfg_with_training.debug = args.debug
     model = WaveLLMTrainer(model_cfg_with_training)
 
-    # Setup callbacks
+    # Setup callbacks - only save checkpoint at the end of training
     callbacks = [
         ModelCheckpoint(
             dirpath=cfg.log_dir,
-            filename="model-epoch={epoch:02d}-val_loss={valid/loss:.4f}",
-            monitor="valid/loss",
-            mode="min",
-            save_top_k=3,
-            save_last=True,
+            filename="model-final",
+            save_top_k=0,  # Don't save top-k checkpoints during training
+            save_last=False,  # Don't save last checkpoint during training
+            every_n_epochs=cfg.training.max_epochs,  # Only save at the final epoch
+            save_on_train_epoch_end=True,  # Save after final training epoch ends
             auto_insert_metric_name=False
         ),
         LearningRateMonitor(logging_interval="step")

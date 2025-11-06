@@ -205,56 +205,82 @@ class WaveLLMDataModule(pl.LightningDataModule):
         }]
 
     def _load_dataset(self, split):
-        """Load dataset using existing wavellm_dataset logic but with new conversation handling"""
+        """Load dataset using existing wavellm_dataset logic but with new conversation handling
+        
+        Returns a wrapper dataset that processes items on-the-fly to avoid loading all data into memory.
+        """
         # Import existing dataset class
-        from .dataset import WaveCaptionDataset, DEFAULT_QUESTION_PROMPTS
-        import random
-
-        # Create original dataset to get raw data
+        from .dataset import WaveCaptionDataset
+        from torch.utils.data import Dataset as TorchDataset
+        
+        # Create original dataset to get raw data (this just loads metadata, not NPZ files)
         original_dataset = WaveCaptionDataset(
             data_root=self.data_root,
             split=split,
             tokenizer=self.tokenizer
         )
-
-        # Create new dataset items with conversation format
-        processed_items = []
-
-        for i, item in enumerate(original_dataset):
-            # Use the existing question/answer format
-            question = item['question']
-            answer = item['answer']
-
-            # Format as conversation
-            conversation = self._format_conversation(question, answer)
-
-            # Preprocess with wave tokens
-            processed_conversation = preprocess_multimodal_wave(
-                [conversation],
-                mm_use_wave_start_end=self.mm_use_wave_start_end,
-                wave_token_len=self.wave_token_len
-            )
-
-            # Process with conversation template
-            processed_data = preprocess_with_conversation(
-                processed_conversation,
-                self.tokenizer,
-                self.conversation_template
-            )
-
-            processed_items.append({
-                'input_ids': processed_data["input_ids"][0],
-                'labels': processed_data["labels"][0],
-                'wave_embed': item['wave_embed'],  # Keep the original wave embedding
-                'question': question,
-                'answer': answer
-            })
-
-            # Limit dataset size for testing
-            if i >= 100:  # Limit to first 100 items for faster iteration
-                break
-
-        return processed_items
+        
+        # Create a wrapper dataset that processes items on-the-fly
+        class ConversationDatasetWrapper(TorchDataset):
+            def __init__(self, base_dataset, format_conversation_fn, 
+                        preprocess_multimodal_wave_fn, preprocess_with_conversation_fn,
+                        tokenizer, conversation_template, mm_use_wave_start_end, wave_token_len):
+                self.base_dataset = base_dataset
+                self.format_conversation = format_conversation_fn
+                self.preprocess_multimodal_wave = preprocess_multimodal_wave_fn
+                self.preprocess_with_conversation = preprocess_with_conversation_fn
+                self.tokenizer = tokenizer
+                self.conversation_template = conversation_template
+                self.mm_use_wave_start_end = mm_use_wave_start_end
+                self.wave_token_len = wave_token_len
+            
+            def __len__(self):
+                return len(self.base_dataset)
+            
+            def __getitem__(self, index):
+                # Get item from base dataset (this loads NPZ file on-demand)
+                item = self.base_dataset[index]
+                
+                # Use the existing question/answer format
+                question = item['question']
+                answer = item['answer']
+                
+                # Format as conversation
+                conversation = self.format_conversation(question, answer)
+                
+                # Preprocess with wave tokens
+                processed_conversation = self.preprocess_multimodal_wave(
+                    [conversation],
+                    mm_use_wave_start_end=self.mm_use_wave_start_end,
+                    wave_token_len=self.wave_token_len
+                )
+                
+                # Process with conversation template
+                processed_data = self.preprocess_with_conversation(
+                    processed_conversation,
+                    self.tokenizer,
+                    self.conversation_template
+                )
+                
+                return {
+                    'input_ids': processed_data["input_ids"][0],
+                    'labels': processed_data["labels"][0],
+                    'wave_embed': item['wave_embed'],  # Keep the original wave embedding
+                    'question': question,
+                    'answer': answer
+                }
+        
+        # Return wrapper dataset (lazy loading)
+        return ConversationDatasetWrapper(
+            original_dataset,
+            self._format_conversation,
+            preprocess_multimodal_wave,
+            preprocess_with_conversation,
+            self.tokenizer,
+            self.conversation_template,
+            self.mm_use_wave_start_end,
+            self.wave_token_len
+        )
 
     def _collate_fn(self, batch):
         """Collate function for batches"""

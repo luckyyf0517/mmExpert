@@ -17,6 +17,7 @@ class WaveLLMTrainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.cfg = cfg
+        self.debug = getattr(cfg, 'debug', False)  # Enable debug mode to display Q&A/Prediction
 
         # Create model using ModelFactory
         self.model = ModelFactory.create_model(cfg.model_type, cfg.model)
@@ -137,8 +138,57 @@ class WaveLLMTrainer(pl.LightningModule):
         for param in self.radar_encoder.parameters():
             param.requires_grad = False
 
+    def _find_all_linear_names(self, model, multimodal_keywords=[]):
+        """Find all linear layer names for LoRA target modules
+        
+        Adopted from FastChat/Stanford Alpaca implementation.
+        Simple logic: find all Linear layers, exclude multimodal_keywords and lm_head.
+        
+        Args:
+            model: The model to search
+            multimodal_keywords: List of keywords to exclude (e.g., ['mm_projection', 'projection'])
+        
+        Returns:
+            List of linear layer names
+        """
+        cls = torch.nn.Linear
+        lora_module_names = set()
+        
+        for name, module in model.named_modules():
+            # Skip multimodal-related modules
+            if any(mm_keyword in name for mm_keyword in multimodal_keywords):
+                continue
+            if isinstance(module, cls):
+                lora_module_names.add(name)
+        
+        # Remove lm_head if present (needed for 16-bit)
+        if 'lm_head' in lora_module_names:
+            lora_module_names.remove('lm_head')
+        
+        return list(lora_module_names)
+
     def _setup_lora(self):
         """Setup LoRA for parameter-efficient fine-tuning"""
+        # Check if we should auto-find target_modules
+        use_auto_find = self.cfg.peft_config.get('auto_find_target_modules', False)
+        target_modules = self.cfg.peft_config.get('target_modules', None)
+        
+        # If auto_find_target_modules is True, always use auto-find (ignore configured target_modules)
+        if use_auto_find:
+            multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection', 'projection'])
+            target_modules = self._find_all_linear_names(self.model, multimodal_keywords=multimodal_keywords)
+            print(f"🔍 Auto-found {len(target_modules)} linear modules for LoRA:")
+            print(f"   Target modules: {target_modules}")
+            print(f"   Excluded: lm_head and modules containing {multimodal_keywords}")
+        # If target_modules is None or empty, auto-find all linear layers
+        elif target_modules is None or len(target_modules) == 0:
+            multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection', 'projection'])
+            target_modules = self._find_all_linear_names(self.model, multimodal_keywords=multimodal_keywords)
+            print(f"🔍 Auto-found {len(target_modules)} linear modules for LoRA (target_modules was empty):")
+            print(f"   Target modules: {target_modules}")
+        else:
+            print(f"📋 Using configured target_modules ({len(target_modules)} modules): {target_modules}")
+        
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
@@ -146,7 +196,7 @@ class WaveLLMTrainer(pl.LightningModule):
             lora_alpha=self.cfg.peft_config.lora_alpha,
             lora_dropout=self.cfg.peft_config.lora_dropout,
             bias=self.cfg.peft_config.bias,
-            target_modules=self.cfg.peft_config.get('target_modules', None),
+            target_modules=target_modules,
         )
 
         self.model = get_peft_model(self.model, peft_config)
@@ -277,11 +327,115 @@ class WaveLLMTrainer(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = outputs['loss']
+        
+        # Debug: Display Question, Answer, and Prediction for each batch
+        # Only print on rank 0 to avoid duplicate output in distributed training
+        if self.debug:
+            # Check if we're on rank 0 (only show debug output once)
+            try:
+                import torch.distributed as dist
+                rank = dist.get_rank() if dist.is_initialized() else 0
+            except:
+                rank = 0
+            if rank == 0:
+                self._debug_print_batch(batch, outputs, batch_idx)
+        
         # Explicitly specify batch_size to avoid inference from ambiguous collection
         batch_size = batch['input_ids'].shape[0]
         self.log('train/loss', loss, on_step=True, on_epoch=False,
                  prog_bar=True, sync_dist=True, batch_size=batch_size)
         return loss
+    
+    def _debug_print_batch(self, batch, outputs, batch_idx):
+        """Print Question, Answer, and Prediction for debugging"""
+        import torch
+        
+        # Get input_ids and labels
+        input_ids = batch['input_ids']
+        labels = batch['labels']
+        
+        # Extract Question and Answer from labels
+        # Labels have -100 for tokens that should be ignored (question part)
+        answer_texts = []
+        question_texts = []
+        
+        for i in range(input_ids.shape[0]):
+            # Get question: tokens before the first non-IGNORE_INDEX token in labels
+            label_seq = labels[i].cpu()
+            answer_start_idx = None
+            for j, token_id in enumerate(label_seq):
+                if token_id != -100:
+                    answer_start_idx = j
+                    break
+            
+            if answer_start_idx is not None:
+                # Question is everything before answer
+                question_ids = input_ids[i][:answer_start_idx].cpu()
+                question_text = self.tokenizer.decode(question_ids, skip_special_tokens=True)
+                question_texts.append(question_text)
+                
+                # Answer is the non-IGNORE_INDEX part of labels
+                answer_mask = label_seq != -100
+                answer_ids = label_seq[answer_mask]
+                answer_text = self.tokenizer.decode(answer_ids, skip_special_tokens=True)
+                answer_texts.append(answer_text)
+            else:
+                question_texts.append("")
+                answer_texts.append("")
+        
+        # Get prediction: generate from model output
+        # Re-run forward to get logits (without labels for generation)
+        predictions = []
+        with torch.no_grad():
+            # Temporarily set model to eval mode for inference
+            was_training = self.model.training
+            self.model.eval()
+            
+            try:
+                mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
+                model_outputs = self.model(
+                    input_ids=input_ids,
+                    mmwave_embeds=mmwave_embeds,
+                    attention_mask=batch.get('attention_mask')
+                )
+                logits = model_outputs.logits
+                
+                # Greedy decoding: take argmax
+                predicted_ids = torch.argmax(logits, dim=-1).cpu()
+                
+                # Extract prediction from the answer part (same as labels)
+                for i in range(input_ids.shape[0]):
+                    label_seq = labels[i].cpu()
+                    answer_start_idx = None
+                    for j, token_id in enumerate(label_seq):
+                        if token_id != -100:
+                            answer_start_idx = j
+                            break
+                    
+                    if answer_start_idx is not None:
+                        # Get predicted tokens for the answer part (same length as answer)
+                        answer_mask = label_seq != -100
+                        answer_length = answer_mask.sum().item()
+                        pred_answer_ids = predicted_ids[i][answer_start_idx:answer_start_idx+answer_length]
+                        pred_text = self.tokenizer.decode(pred_answer_ids, skip_special_tokens=True)
+                        predictions.append(pred_text)
+                    else:
+                        predictions.append("")
+            finally:
+                # Restore training mode
+                if was_training:
+                    self.model.train()
+        
+        # Print debug information
+        print(f"\n{'='*80}")
+        print(f"[DEBUG] Batch {batch_idx} (showing first 2 samples):")
+        print(f"{'='*80}")
+        for i in range(min(2, len(question_texts))):
+            print(f"\n[Sample {i+1}]")
+            print(f"Question: {question_texts[i][:300]}..." if len(question_texts[i]) > 300 else f"Question: {question_texts[i]}")
+            print(f"Answer:   {answer_texts[i][:300]}..." if len(answer_texts[i]) > 300 else f"Answer:   {answer_texts[i]}")
+            print(f"Prediction: {predictions[i][:300]}..." if len(predictions[i]) > 300 else f"Prediction: {predictions[i]}")
+        print(f"{'='*80}\n")
 
     def validation_step(self, batch, batch_idx):
         outputs = self(batch)

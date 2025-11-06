@@ -13,7 +13,8 @@ model_cfg:
     lora_alpha: 32
     lora_dropout: 0.05
     bias: "none"
-    target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    auto_find_target_modules: true  # Auto-find all linear layers (except lm_head and multimodal modules)
+    multimodal_keywords: ["mm_projection"]  # Exclude these keywords from LoRA
 
   conversation_template: "conv_phi3"
   mm_use_wave_start_end: true
