@@ -263,13 +263,48 @@ class WaveLLMDataModule(pl.LightningDataModule):
         input_ids = [item['input_ids'] for item in batch]
         labels = [item['labels'] for item in batch]
 
-        # Convert wave_embeds to tensor format expected by the model
-        # Stack the multi-view radar data
-        wave_features = []
+        # Stack wave_embeds into [B, H, W] format for each view
+        # Find max time dimension (W) for each view to pad to same length
+        batch_size = len(wave_embeds)
+        
+        # Get max time dimension for each view
+        max_range_time = max(embed['range_time'].shape[1] for embed in wave_embeds)
+        max_doppler_time = max(embed['doppler_time'].shape[1] for embed in wave_embeds)
+        max_azimuth_time = max(embed['azimuth_time'].shape[1] for embed in wave_embeds)
+        
+        # Stack and pad each view to [B, H, W]
+        stacked_range_time = []
+        stacked_doppler_time = []
+        stacked_azimuth_time = []
+        
         for embed in wave_embeds:
-            # Combine range, doppler, azimuth views into single feature tensor
-            # encoder will handle this format
-            wave_features.append(embed)
+            # Pad range_time to max time dimension
+            range_time = embed['range_time']  # [H, W]
+            if range_time.shape[1] < max_range_time:
+                pad_w = max_range_time - range_time.shape[1]
+                range_time = torch.cat([range_time, torch.zeros(range_time.shape[0], pad_w, dtype=range_time.dtype, device=range_time.device)], dim=1)
+            stacked_range_time.append(range_time)
+            
+            # Pad doppler_time
+            doppler_time = embed['doppler_time']  # [H, W]
+            if doppler_time.shape[1] < max_doppler_time:
+                pad_w = max_doppler_time - doppler_time.shape[1]
+                doppler_time = torch.cat([doppler_time, torch.zeros(doppler_time.shape[0], pad_w, dtype=doppler_time.dtype, device=doppler_time.device)], dim=1)
+            stacked_doppler_time.append(doppler_time)
+            
+            # Pad azimuth_time
+            azimuth_time = embed['azimuth_time']  # [H, W]
+            if azimuth_time.shape[1] < max_azimuth_time:
+                pad_w = max_azimuth_time - azimuth_time.shape[1]
+                azimuth_time = torch.cat([azimuth_time, torch.zeros(azimuth_time.shape[0], pad_w, dtype=azimuth_time.dtype, device=azimuth_time.device)], dim=1)
+            stacked_azimuth_time.append(azimuth_time)
+        
+        # Stack to [B, H, W] format
+        mmwave_features = {
+            'range_time': torch.stack(stacked_range_time),  # [B, H, W]
+            'doppler_time': torch.stack(stacked_doppler_time),  # [B, H, W]
+            'azimuth_time': torch.stack(stacked_azimuth_time)  # [B, H, W]
+        }
 
         # Pad sequences to max length in batch
         max_len = max(len(ids) for ids in input_ids)
@@ -297,7 +332,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
             attention_masks.append(attention_mask)
 
         return {
-            'mmwave_features': wave_features,  # Keep as list of dicts for encoder
+            'mmwave_features': mmwave_features,  # Dict with [B, H, W] tensors
             'input_ids': torch.tensor(padded_input_ids, dtype=torch.long),
             'labels': torch.tensor(padded_labels, dtype=torch.long),
             'attention_mask': torch.tensor(attention_masks, dtype=torch.long)

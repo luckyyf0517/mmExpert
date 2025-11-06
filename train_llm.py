@@ -6,6 +6,8 @@ from datetime import datetime
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DeepSpeedStrategy
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from swanlab.integration.pytorch_lightning import SwanLabLogger
+import swanlab
 
 from easydict import EasyDict
 from src.llm.utils.config_loader import load_yaml_config
@@ -108,6 +110,9 @@ def main():
     log_dir_with_timestamp = os.path.join(log_dir_parent, f"{timestamp}_{log_dir_name}")
     cfg.log_dir = log_dir_with_timestamp
     print(f"Using log directory: {cfg.log_dir}")
+    
+    # Extract experiment name from log_dir (the directory name with timestamp)
+    experiment_name = os.path.basename(log_dir_with_timestamp)
 
     # Initialize data module
     data_module = WaveLLMDataModule(cfg.data_cfg)
@@ -132,6 +137,23 @@ def main():
         ),
         LearningRateMonitor(logging_interval="step")
     ]
+    
+    # Setup SwanLab logger
+    # Ensure previous SwanLab experiment is finished before creating new logger
+    import time
+    try:
+        swanlab.finish()
+        # Wait a moment to ensure the previous experiment is fully closed
+        time.sleep(0.5)
+    except Exception:
+        # If finish fails, try to clear any existing experiment
+        try:
+            swanlab.finish()
+            time.sleep(0.5)
+        except Exception:
+            pass
+    
+    swanlab_logger = SwanLabLogger(name=experiment_name, project='mmExpert-LLM')
 
     # Create DeepSpeed strategy
     strategy = DeepSpeedStrategy(
@@ -158,6 +180,7 @@ def main():
         enable_progress_bar=True,
         deterministic=True,
         callbacks=callbacks,
+        logger=swanlab_logger,
         default_root_dir=cfg.log_dir
     )
 

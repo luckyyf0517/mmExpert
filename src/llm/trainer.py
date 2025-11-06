@@ -129,7 +129,9 @@ class WaveLLMTrainer(pl.LightningModule):
         self.radar_encoder.eval()  # Freeze encoder
 
         # Create projection layer
-        self.mm_projection_layers = nn.Linear(embed_dim, self.model.config.hidden_size)
+        # Use model's dtype to ensure compatibility
+        model_dtype = next(self.model.parameters()).dtype
+        self.mm_projection_layers = nn.Linear(embed_dim, self.model.config.hidden_size).to(dtype=model_dtype)
 
         # Freeze encoder parameters
         for param in self.radar_encoder.parameters():
@@ -171,7 +173,10 @@ class WaveLLMTrainer(pl.LightningModule):
 
         Args:
             batch: {
-                'mmwave_features': List[Dict]  # List of radar data dicts with range/doppler/azimuth
+                'mmwave_features': Dict with:
+                    'range_time': [B, H, W] radar range-time data
+                    'doppler_time': [B, H, W] radar doppler-time data
+                    'azimuth_time': [B, H, W] radar azimuth-time data
                 'input_ids': [B, L],  # tokenized conversation input with wave tokens
                 'labels': [B, L]  # tokenized labels with masked instructions
                 'attention_mask': [B, L]  # attention mask
@@ -183,9 +188,28 @@ class WaveLLMTrainer(pl.LightningModule):
         input_ids = batch['input_ids']
         labels = batch['labels']
         attention_mask = batch.get('attention_mask')
+        
+        # Debug: Print batch info (only in debug mode to avoid spam)
+        import os
+        if os.environ.get('DEBUG_BATCH_SIZE', '0') == '1':
+            print(f"[DEBUG forward] input_ids shape: {input_ids.shape}, batch_size: {input_ids.shape[0]}")
+            print(f"[DEBUG forward] labels shape: {labels.shape}, batch_size: {labels.shape[0]}")
+            if isinstance(batch['mmwave_features'], dict):
+                for key, tensor in batch['mmwave_features'].items():
+                    print(f"[DEBUG forward] mmwave_features['{key}'] shape: {tensor.shape}, batch_size: {tensor.shape[0]}")
+            elif isinstance(batch['mmwave_features'], list):
+                print(f"[DEBUG forward] mmwave_features list length: {len(batch['mmwave_features'])}")
+                if len(batch['mmwave_features']) > 0:
+                    first_feat = batch['mmwave_features'][0]
+                    for key, tensor in first_feat.items():
+                        print(f"[DEBUG forward] mmwave_features[0][{key}] shape: {tensor.shape}")
 
         # Process mmwave features through encoder and projection
         mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
+        
+        # Debug: Print processed mmwave embeds
+        if os.environ.get('DEBUG_BATCH_SIZE', '0') == '1':
+            print(f"[DEBUG forward] mmwave_embeds shape: {mmwave_embeds.shape}, batch_size: {mmwave_embeds.shape[0]}")
 
         # Forward pass with conversation-based input
         outputs = self.model(
@@ -197,68 +221,53 @@ class WaveLLMTrainer(pl.LightningModule):
 
         return {'loss': outputs.loss}
 
-    def _process_mmwave_features(self, mmwave_features_list):
+    def _process_mmwave_features(self, mmwave_features):
         """
         Process raw radar data through encoder and projection layers
 
         Args:
-            mmwave_features_list: List[Dict] where each dict contains:
-                'range_time': [T, H, W] radar range-time data
-                'doppler_time': [T, H, W] radar doppler-time data
-                'azimuth_time': [T, H, W] radar azimuth-time data
+            mmwave_features: Dict containing:
+                'range_time': [B, H, W] radar range-time data
+                'doppler_time': [B, H, W] radar doppler-time data
+                'azimuth_time': [B, H, W] radar azimuth-time data
 
         Returns:
             mmwave_embeds: [B, T', H] processed mmwave embeddings
         """
-        batch_size = len(mmwave_features_list)
+        batch_size = mmwave_features['range_time'].shape[0]
 
         # Get model dtype to ensure type consistency
         model_dtype = next(self.model.parameters()).dtype
         
-        # Process each sample through radar encoder
-        all_features = []
-        for i, wave_data in enumerate(mmwave_features_list):
-            # Prepare input for encoder (format expected by radar encoder)
-            # Convert input to float32 to avoid dtype mismatch in frozen encoder
-            encoder_input = {
-                'range_time': wave_data['range_time'].unsqueeze(0).to(dtype=torch.float32),  # Add batch dim
-                'doppler_time': wave_data['doppler_time'].unsqueeze(0).to(dtype=torch.float32),
-                'azimuth_time': wave_data['azimuth_time'].unsqueeze(0).to(dtype=torch.float32)
-            }
+        # Get encoder dtype - check if encoder has been converted to bfloat16
+        encoder_dtype = next(self.radar_encoder.parameters()).dtype if list(self.radar_encoder.parameters()) else torch.float32
+        
+        # Convert input to match encoder dtype to avoid dtype mismatch
+        encoder_input = {
+            'range_time': mmwave_features['range_time'].to(dtype=encoder_dtype),  # [B, H, W]
+            'doppler_time': mmwave_features['doppler_time'].to(dtype=encoder_dtype),  # [B, H, W]
+            'azimuth_time': mmwave_features['azimuth_time'].to(dtype=encoder_dtype)  # [B, H, W]
+        }
 
-            # Forward through radar encoder
-            # Convert dict to ModalityData format
-            from src.clip.core.base import ModalityData, ModalityType
-            modality_data = ModalityData(data=encoder_input, modality=ModalityType.RADAR)
-            
-            with torch.no_grad():  # Radar encoder is frozen
-                result = self.radar_encoder.encode(modality_data, return_sequence=True)
-                # Use sequence_features instead of features when return_sequence=True
-                encoder_output = result.sequence_features if result.sequence_features is not None else result.features  # [1, T, D]
+        # Forward through radar encoder (batch processing)
+        # Convert dict to ModalityData format
+        from src.clip.core.base import ModalityData, ModalityType
+        modality_data = ModalityData(data=encoder_input, modality=ModalityType.RADAR)
+        
+        with torch.no_grad():  # Radar encoder is frozen
+            result = self.radar_encoder.encode(modality_data, return_sequence=True)
+            # Use sequence_features instead of features when return_sequence=True
+            encoder_output = result.sequence_features if result.sequence_features is not None else result.features  # [B, T, D]
 
-            # The encoder should output [1, T, D] features
-            features = encoder_output.squeeze(0)  # Remove batch dim -> [T, D]
-            # Convert to model dtype after encoding
-            features = features.to(dtype=model_dtype)
-            all_features.append(features)
+        # The encoder should output [B, T, D] features
+        mmwave_features_tensor = encoder_output  # [B, T, D]
+        
+        # Convert to model dtype after encoding
+        mmwave_features_tensor = mmwave_features_tensor.to(dtype=model_dtype)
 
-        # Pad or stack features to have consistent sequence length
-        max_len = max(feat.shape[0] for feat in all_features)
-
-        # Pad features to max length (features already converted to model_dtype above)
-        padded_features = []
-        for feat in all_features:
-            if feat.shape[0] < max_len:
-                # Pad with zeros (using same dtype as feat)
-                pad_size = max_len - feat.shape[0]
-                padding = torch.zeros(pad_size, feat.shape[1], device=feat.device, dtype=feat.dtype)
-                padded_feat = torch.cat([feat, padding], dim=0)
-            else:
-                padded_feat = feat
-            padded_features.append(padded_feat)
-
-        # Stack batch: [B, T, D]
-        mmwave_features_tensor = torch.stack(padded_features)
+        # Ensure projection layer dtype matches input dtype
+        if mmwave_features_tensor.dtype != next(self.mm_projection_layers.parameters()).dtype:
+            self.mm_projection_layers = self.mm_projection_layers.to(dtype=mmwave_features_tensor.dtype)
 
         # Project to model hidden size
         mmwave_embeds = self.mm_projection_layers(mmwave_features_tensor)  # [B, T, H]
@@ -268,15 +277,19 @@ class WaveLLMTrainer(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = outputs['loss']
+        # Explicitly specify batch_size to avoid inference from ambiguous collection
+        batch_size = batch['input_ids'].shape[0]
         self.log('train/loss', loss, on_step=True, on_epoch=False,
-                 prog_bar=True, sync_dist=True)
+                 prog_bar=True, sync_dist=True, batch_size=batch_size)
         return loss
 
     def validation_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = outputs['loss']
+        # Explicitly specify batch_size to avoid inference from ambiguous collection
+        batch_size = batch['input_ids'].shape[0]
         self.log('valid/loss', loss, on_step=False, on_epoch=True,
-                 prog_bar=True, sync_dist=True)
+                 prog_bar=True, sync_dist=True, batch_size=batch_size)
         return loss
 
     def configure_optimizers(self):

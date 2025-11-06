@@ -34,4 +34,4 @@ training:
   weight_decay: 0.0
   warmup_steps: 100
 
-log_dir: "output/phi3_mmwave_conv"
+log_dir: "output/phi3"
