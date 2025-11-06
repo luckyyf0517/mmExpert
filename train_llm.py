@@ -14,6 +14,9 @@ from swanlab.integration.pytorch_lightning import SwanLabLogger
 # Ignore SwanLab warning about experiment already in progress
 warnings.filterwarnings('ignore', message='.*There is a swanlab experiment already in progress.*')
 
+# Ignore PyTorch Lightning model summary precision warning (bf16-mixed not supported for size estimation)
+warnings.filterwarnings('ignore', message='.*Precision bf16-mixed is not supported by the model summary.*')
+
 from easydict import EasyDict
 from src.llm.utils.config_loader import load_yaml_config
 from src.llm.utils.deepspeed_utils import add_deepspeed_args, get_train_ds_config
