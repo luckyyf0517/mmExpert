@@ -125,7 +125,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
         self.model_max_length = cfg.get('model_max_length', 2048)
         self.batch_size = cfg.batch_size
         self.num_workers = cfg.get('num_workers', 4)
-        self.split = cfg.split  # 'train_QAs' or 'test_QAs'
+        self.train_split = cfg.train_split
+        self.test_split = cfg.test_split
 
         # Tokenizer will be set in setup
         self.tokenizer = None
@@ -148,11 +149,11 @@ class WaveLLMDataModule(pl.LightningDataModule):
 
         # Load datasets
         if stage == 'fit' or stage is None:
-            self.train_dataset = self._load_dataset('train_QAs')
-            self.eval_dataset = self._load_dataset('test_QAs') if stage == 'fit' else None
+            self.train_dataset = self._load_dataset(self.train_split)
+            self.eval_dataset = self._load_dataset(self.test_split) if stage == 'fit' else None
 
         if stage == 'test':
-            self.test_dataset = self._load_dataset('test_QAs')
+            self.test_dataset = self._load_dataset(self.test_split)
 
     def _load_tokenizer(self):
         """Load tokenizer from model path"""

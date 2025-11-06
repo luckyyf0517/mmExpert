@@ -23,7 +23,8 @@ model_cfg:
 data_cfg:
   model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/0a67737cc96d2554230f90338b163bc6380a2a85"
   model_max_length: 2048
-  split: "train_QAs"
+  train_split: "train_QAs"
+  test_split: "test_QAs"
 
   # Must match model_cfg
   conversation_template: "conv_phi3"
