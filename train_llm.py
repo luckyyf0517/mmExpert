@@ -24,6 +24,16 @@ def parse_args():
     parser.add_argument('--data_root', type=str, default=None,
                         help='Path to feature directory (overrides config file)')
 
+    # Training parameters (override config file)
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Batch size for training (overrides config file)')
+    parser.add_argument('--num_workers', type=int, default=None,
+                        help='Number of data loading workers (overrides config file)')
+    parser.add_argument('--max_epochs', type=int, default=None,
+                        help='Maximum number of training epochs (overrides config file)')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=None,
+                        help='Gradient accumulation steps (overrides config file)')
+
     # Basic training args
     parser.add_argument('--test', action='store_true',
                         help='Run in test mode (no training)')
@@ -55,6 +65,31 @@ def main():
         # Update encoder_path to match data_root if not already set
         if not cfg.model_cfg.encoder_path or cfg.model_cfg.encoder_path == "":
             cfg.model_cfg.encoder_path = cfg.data_cfg.data_root
+
+    # Override training parameters if provided via command line, otherwise use config file values
+    if args.batch_size is not None:
+        cfg.data_cfg.batch_size = args.batch_size
+        print(f"Using batch_size from command line: {args.batch_size}")
+    elif not hasattr(cfg.data_cfg, 'batch_size') or cfg.data_cfg.batch_size is None:
+        raise ValueError("batch_size must be provided either via --batch_size argument or in config file")
+    
+    if args.num_workers is not None:
+        cfg.data_cfg.num_workers = args.num_workers
+        print(f"Using num_workers from command line: {args.num_workers}")
+    elif not hasattr(cfg.data_cfg, 'num_workers'):
+        cfg.data_cfg.num_workers = 4  # Default value
+    
+    if args.max_epochs is not None:
+        cfg.training.max_epochs = args.max_epochs
+        print(f"Using max_epochs from command line: {args.max_epochs}")
+    elif not hasattr(cfg.training, 'max_epochs') or cfg.training.max_epochs is None:
+        raise ValueError("max_epochs must be provided either via --max_epochs argument or in config file")
+    
+    if args.gradient_accumulation_steps is not None:
+        cfg.training.gradient_accumulation_steps = args.gradient_accumulation_steps
+        print(f"Using gradient_accumulation_steps from command line: {args.gradient_accumulation_steps}")
+    elif not hasattr(cfg.training, 'gradient_accumulation_steps'):
+        cfg.training.gradient_accumulation_steps = 1  # Default value
 
     # Set seeds
     pl.seed_everything(args.seed)
