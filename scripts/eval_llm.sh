@@ -22,6 +22,4 @@ python evaluate_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
     --config config/llm/phi3.yaml \
     --data_root ${DATA_ROOT} \
-    --batch_size 4 \
-    --max_new_tokens 50 \
-    --temperature 0.7
+    --batch_size 4

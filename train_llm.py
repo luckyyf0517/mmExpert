@@ -5,6 +5,7 @@ import os
 import warnings
 from datetime import datetime
 from termcolor import colored
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DeepSpeedStrategy
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -47,8 +48,72 @@ def override_config(cfg_obj, attr_name, arg_value, arg_name):
     if arg_value is not None:
         setattr(cfg_obj, attr_name, arg_value)
         log_info(f"Using {arg_name} from command line: {arg_value}")
-    elif not hasattr(cfg_obj, attr_name) or getattr(cfg_obj, attr_name) is None:
-        raise ValueError(f"{arg_name} must be provided either via --{arg_name} argument or in config file")
+
+
+def save_training_artifacts(model, output_dir):
+    """Save LoRA adapter and projection layers in safetensors format
+    
+    Args:
+        model: WaveLLMTrainer model instance
+        output_dir: Directory to save artifacts
+    """
+    from safetensors.torch import save_file
+    from peft import get_peft_model_state_dict
+    import json
+    
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    log_info(f"Saving training artifacts to {output_dir}")
+    
+    # Use PEFT's get_peft_model_state_dict to get ONLY adapter weights (no embeddings)
+    # This is the proper way to extract LoRA parameters without unwanted base model weights
+    lora_state_dict = get_peft_model_state_dict(model.model)
+    
+    # Make tensors contiguous for safetensors
+    lora_state_dict = {k: v.contiguous() for k, v in lora_state_dict.items()}
+    
+    # Save LoRA adapter weights
+    save_file(lora_state_dict, os.path.join(output_dir, "adapter_model.safetensors"))
+    log_info(f"LoRA adapter saved: {len(lora_state_dict)} parameters")
+    
+    # Save LoRA config (need to extract from model.model.peft_config)
+    adapter_config = model.model.peft_config['default'].to_dict()
+    
+    # Convert sets to lists for JSON serialization
+    def make_json_serializable(obj):
+        if isinstance(obj, set):
+            return list(obj)
+        elif isinstance(obj, dict):
+            return {k: make_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [make_json_serializable(item) for item in obj]
+        return obj
+    
+    adapter_config = make_json_serializable(adapter_config)
+    
+    with open(os.path.join(output_dir, "adapter_config.json"), 'w') as f:
+        json.dump(adapter_config, f, indent=2)
+    log_info(f"LoRA config saved (adapter_config.json)")
+    
+    # Calculate LoRA size
+    lora_size = sum(p.numel() * p.element_size() for p in lora_state_dict.values()) / 1024 / 1024
+    log_info(f"LoRA adapter size: {lora_size:.2f} MB")
+    
+    # Save mm_projection_layers as safetensors
+    projection_state_dict = {
+        'mm_projection_layers.weight': model.mm_projection_layers.weight.contiguous(),
+        'mm_projection_layers.bias': model.mm_projection_layers.bias.contiguous()
+    }
+    projection_path = os.path.join(output_dir, "non_lora_trainables.safetensors")
+    save_file(projection_state_dict, projection_path)
+    log_info(f"Projection layers saved to non_lora_trainables.safetensors")
+    
+    # Calculate projection size
+    proj_size = sum(p.numel() * p.element_size() for p in projection_state_dict.values()) / 1024 / 1024
+    log_info(f"Projection layers size: {proj_size:.2f} MB")
+    
+    log_info(f"Training artifacts saved successfully! Total size: {lora_size + proj_size:.2f} MB")
 
 
 def parse_args():
@@ -70,6 +135,8 @@ def parse_args():
                         help='Number of data loading workers (overrides config file)')
     parser.add_argument('--max_epochs', type=int, default=None,
                         help='Maximum number of training epochs (overrides config file)')
+    parser.add_argument('--max_steps', type=int, default=None,
+                        help='Maximum number of training steps (overrides max_epochs)')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=None,
                         help='Gradient accumulation steps (overrides config file)')
 
@@ -137,17 +204,8 @@ def main():
     model_cfg_with_training.debug = args.debug
     model = WaveLLMTrainer(model_cfg_with_training)
 
-    # Setup callbacks - only save checkpoint at the end of training
+    # Setup callbacks - no checkpoint saving (we'll save LoRA adapter manually)
     callbacks = [
-        ModelCheckpoint(
-            dirpath=cfg.log_dir,
-            filename="model-final",
-            save_top_k=0,  # Don't save top-k checkpoints during training
-            save_last=False,  # Don't save last checkpoint during training
-            every_n_epochs=cfg.training.max_epochs,  # Only save at the final epoch
-            save_on_train_epoch_end=True,  # Save after final training epoch ends
-            auto_insert_metric_name=False
-        ),
         LearningRateMonitor(logging_interval="step")
     ]
     
@@ -165,28 +223,40 @@ def main():
     # Create trainer
     # When using deepspeed launcher, devices can be auto-detected from environment
     # But we still need world_size for DeepSpeed config calculation
-    trainer = pl.Trainer(
-        accelerator='gpu',
-        devices="auto",  # Auto-detect from deepspeed launcher
-        strategy=strategy,
-        precision='bf16-mixed',
-        max_epochs=cfg.training.max_epochs,
-        accumulate_grad_batches=cfg.training.gradient_accumulation_steps,
-        gradient_clip_val=1.0,
-        val_check_interval=1.0,
-        log_every_n_steps=1,
-        enable_checkpointing=True,
-        enable_progress_bar=True,
-        deterministic=True,
-        callbacks=callbacks,
-        logger=swanlab_logger,
-        default_root_dir=cfg.log_dir
-    )
+    trainer_kwargs = {
+        'accelerator': 'gpu',
+        'devices': "auto",  # Auto-detect from deepspeed launcher
+        'strategy': strategy,
+        'precision': 'bf16-mixed',
+        'accumulate_grad_batches': cfg.training.gradient_accumulation_steps,
+        'gradient_clip_val': 1.0,
+        'val_check_interval': 1.0,
+        'log_every_n_steps': 1,
+        'enable_checkpointing': False,  # Disable automatic checkpointing (we save manually)
+        'enable_progress_bar': True,
+        'deterministic': True,
+        'callbacks': callbacks,
+        'logger': swanlab_logger,
+        'default_root_dir': cfg.log_dir
+    }
+    
+    # Use max_steps if provided, otherwise use max_epochs
+    if args.max_steps is not None:
+        trainer_kwargs['max_steps'] = args.max_steps
+        log_info(f"Using max_steps: {args.max_steps}")
+    else:
+        trainer_kwargs['max_epochs'] = cfg.training.max_epochs
+    
+    trainer = pl.Trainer(**trainer_kwargs)
 
     # Train
     log_info("Starting training...")
     trainer.fit(model, datamodule=data_module)
     log_info("Training completed successfully")
+    
+    # Save training artifacts (only on rank 0)
+    if is_rank_0():
+        save_training_artifacts(model, cfg.log_dir)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,9 @@ from peft import LoraConfig, get_peft_model, TaskType
 
 from .llm.model_factory import ModelFactory
 
+import warnings
+warnings.filterwarnings('ignore', message='.*Found .* module.*in eval mode.*')
+
 
 def _is_rank_0():
     """Check if current process is rank 0"""
@@ -288,9 +291,10 @@ class WaveLLMTrainer(pl.LightningModule):
         # Forward pass with conversation-based input
         outputs = self.model(
             input_ids=input_ids,
-            mmwave_embeds=mmwave_embeds,
+            input_wave_embeds=mmwave_embeds,
             attention_mask=attention_mask,
-            labels=labels
+            labels=labels,
+            return_dict=True
         )
 
         return {'loss': outputs.loss}
@@ -394,7 +398,7 @@ class WaveLLMTrainer(pl.LightningModule):
                 "interval": "step",
             }
         }
-
+    
     def on_test_epoch_start(self):
         """Initialize result JSON file at the start of test epoch"""
         import os
@@ -426,9 +430,6 @@ class WaveLLMTrainer(pl.LightningModule):
         if _is_rank_0():
             print(colored("[INFO]", "green") + f" Initializing result file: {self.output_file}")
         
-        self.test_max_new_tokens = getattr(self.cfg, 'test_max_new_tokens', 50)
-        self.test_temperature = getattr(self.cfg, 'test_temperature', 0.7)
-
     def test_step(self, batch, batch_idx):
         """Generate predictions and save to JSON file"""
         import json
@@ -439,8 +440,6 @@ class WaveLLMTrainer(pl.LightningModule):
         # Get questions and answers from batch (if available)
         questions = batch.get('questions', [])
         answers = batch.get('answers', [])
-        
-        from IPython import embed; embed(header='trainer.py:568')
         
         # Get batch size
         batch_size = batch['input_ids'].shape[0]
@@ -521,11 +520,15 @@ class WaveLLMTrainer(pl.LightningModule):
                     'input_ids': input_ids_single,
                     'input_wave_embeds': mmwave_embeds_single,
                     'attention_mask': attention_mask_single,
-                    'max_new_tokens': self.test_max_new_tokens,
-                    'temperature': self.test_temperature,
                     'pad_token_id': self.tokenizer.pad_token_id,
                     'eos_token_id': self.tokenizer.eos_token_id,
+                    # Generation parameters
                     'do_sample': True,
+                    'temperature': 1.0,
+                    'top_k': 50,
+                    'top_p': 0.95,
+                    'num_beams': 4,
+                    'max_new_tokens': 30,
                 }
                 
                 # Generate using the model

@@ -21,7 +21,7 @@ class WaveBaseModel(PreTrainedModel):
             inputs_embeds: Text embeddings [B, L, H]
             input_wave_embeds: Mmwave features [B, T, H] (already projected)
             input_ids: Input token ids [B, L]
-            attention_mask: Original attention mask [B, L]
+            attention_mask: Original attention mask [B, L] or None
         Returns:
             Combined embeddings [B, L_new, H] and updated attention mask [B, L_new]
         """
@@ -31,6 +31,10 @@ class WaveBaseModel(PreTrainedModel):
 
         # Get device from input tensors
         device = inputs_embeds.device
+        
+        # Create default attention_mask if None
+        if attention_mask is None:
+            attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=device)
         
         # Process each sample in the batch
         new_embeds = []
@@ -58,4 +62,7 @@ class WaveBaseModel(PreTrainedModel):
             new_embeds.append(torch.stack(sample_embeds))
             new_masks.append(torch.tensor(sample_mask, dtype=torch.long, device=device))
 
-        return torch.stack(new_embeds), torch.stack(new_masks)
+        result_embeds = torch.stack(new_embeds)
+        result_masks = torch.stack(new_masks)
+        
+        return result_embeds, result_masks
