@@ -3,11 +3,31 @@
 import os
 import torch
 import torch.nn as nn
+from termcolor import colored
 import pytorch_lightning as pl
 from transformers import get_cosine_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, TaskType
 
 from .llm.model_factory import ModelFactory
+
+
+def _is_rank_0():
+    """Check if current process is rank 0"""
+    try:
+        import torch.distributed as dist
+        if dist.is_initialized():
+            return dist.get_rank() == 0
+    except:
+        pass
+    # Fallback to environment variable
+    local_rank = os.environ.get('LOCAL_RANK', None)
+    rank = os.environ.get('RANK', None)
+    if rank is not None:
+        return int(rank) == 0
+    if local_rank is not None:
+        return int(local_rank) == 0
+    # Default to True if not in distributed mode
+    return True
 
 
 class WaveLLMTrainer(pl.LightningModule):
@@ -177,17 +197,40 @@ class WaveLLMTrainer(pl.LightningModule):
         if use_auto_find:
             multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection', 'projection'])
             target_modules = self._find_all_linear_names(self.model, multimodal_keywords=multimodal_keywords)
-            print(f"🔍 Auto-found {len(target_modules)} linear modules for LoRA:")
-            print(f"   Target modules: {target_modules}")
-            print(f"   Excluded: lm_head and modules containing {multimodal_keywords}")
+            if _is_rank_0():
+                # Group modules by type for cleaner output
+                module_types = {}
+                for module_name in target_modules:
+                    if 'self_attn' in module_name:
+                        if 'qkv_proj' in module_name:
+                            module_type = 'self_attn.qkv_proj'
+                        elif 'o_proj' in module_name:
+                            module_type = 'self_attn.o_proj'
+                        else:
+                            module_type = 'self_attn.*'
+                    elif 'mlp' in module_name:
+                        if 'gate_up_proj' in module_name:
+                            module_type = 'mlp.gate_up_proj'
+                        elif 'down_proj' in module_name:
+                            module_type = 'mlp.down_proj'
+                        else:
+                            module_type = 'mlp.*'
+                    else:
+                        module_type = 'other'
+                    module_types[module_type] = module_types.get(module_type, 0) + 1
+                
+                print(colored("[INFO]", "green") + f" Auto-found {len(target_modules)} linear modules for LoRA")
+                print(f"   Module breakdown: {', '.join([f'{k}: {v}' for k, v in sorted(module_types.items())])}")
+                print(f"   Excluded: lm_head and modules containing {multimodal_keywords}")
         # If target_modules is None or empty, auto-find all linear layers
         elif target_modules is None or len(target_modules) == 0:
             multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection', 'projection'])
             target_modules = self._find_all_linear_names(self.model, multimodal_keywords=multimodal_keywords)
-            print(f"🔍 Auto-found {len(target_modules)} linear modules for LoRA (target_modules was empty):")
-            print(f"   Target modules: {target_modules}")
+            if _is_rank_0():
+                print(colored("[INFO]", "green") + f" Auto-found {len(target_modules)} linear modules for LoRA (target_modules was empty)")
         else:
-            print(f"📋 Using configured target_modules ({len(target_modules)} modules): {target_modules}")
+            if _is_rank_0():
+                print(colored("[INFO]", "green") + f" Using configured target_modules ({len(target_modules)} modules)")
         
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
@@ -215,7 +258,8 @@ class WaveLLMTrainer(pl.LightningModule):
             if param.requires_grad:
                 trainable_params += param.numel()
 
-        print(f"Trainable params: {trainable_params:,} || All params: {all_param:,} || Trainable%: {100 * trainable_params / all_param}")
+        if _is_rank_0():
+            print(colored("[INFO]", "green") + f" Trainable params: {trainable_params:,} || All params: {all_param:,} || Trainable%: {100 * trainable_params / all_param:.2f}%")
 
     def forward(self, batch):
         """
@@ -242,24 +286,24 @@ class WaveLLMTrainer(pl.LightningModule):
         # Debug: Print batch info (only in debug mode to avoid spam)
         import os
         if os.environ.get('DEBUG_BATCH_SIZE', '0') == '1':
-            print(f"[DEBUG forward] input_ids shape: {input_ids.shape}, batch_size: {input_ids.shape[0]}")
-            print(f"[DEBUG forward] labels shape: {labels.shape}, batch_size: {labels.shape[0]}")
+            print(colored("[DEBUG]", "cyan") + f" forward input_ids shape: {input_ids.shape}, batch_size: {input_ids.shape[0]}")
+            print(colored("[DEBUG]", "cyan") + f" forward labels shape: {labels.shape}, batch_size: {labels.shape[0]}")
             if isinstance(batch['mmwave_features'], dict):
                 for key, tensor in batch['mmwave_features'].items():
-                    print(f"[DEBUG forward] mmwave_features['{key}'] shape: {tensor.shape}, batch_size: {tensor.shape[0]}")
+                    print(colored("[DEBUG]", "cyan") + f" forward mmwave_features['{key}'] shape: {tensor.shape}, batch_size: {tensor.shape[0]}")
             elif isinstance(batch['mmwave_features'], list):
-                print(f"[DEBUG forward] mmwave_features list length: {len(batch['mmwave_features'])}")
+                print(colored("[DEBUG]", "cyan") + f" forward mmwave_features list length: {len(batch['mmwave_features'])}")
                 if len(batch['mmwave_features']) > 0:
                     first_feat = batch['mmwave_features'][0]
                     for key, tensor in first_feat.items():
-                        print(f"[DEBUG forward] mmwave_features[0][{key}] shape: {tensor.shape}")
+                        print(colored("[DEBUG]", "cyan") + f" forward mmwave_features[0][{key}] shape: {tensor.shape}")
 
         # Process mmwave features through encoder and projection
         mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
         
         # Debug: Print processed mmwave embeds
         if os.environ.get('DEBUG_BATCH_SIZE', '0') == '1':
-            print(f"[DEBUG forward] mmwave_embeds shape: {mmwave_embeds.shape}, batch_size: {mmwave_embeds.shape[0]}")
+            print(colored("[DEBUG]", "cyan") + f" forward mmwave_embeds shape: {mmwave_embeds.shape}, batch_size: {mmwave_embeds.shape[0]}")
 
         # Forward pass with conversation-based input
         outputs = self.model(
@@ -427,15 +471,15 @@ class WaveLLMTrainer(pl.LightningModule):
                     self.model.train()
         
         # Print debug information
-        print(f"\n{'='*80}")
-        print(f"[DEBUG] Batch {batch_idx} (showing first 2 samples):")
-        print(f"{'='*80}")
+        print("\n" + "=" * 80)
+        print(colored("[DEBUG]", "cyan") + f" Batch {batch_idx} (showing first 2 samples):")
+        print("=" * 80)
         for i in range(min(2, len(question_texts))):
             print(f"\n[Sample {i+1}]")
             print(f"Question: {question_texts[i][:300]}..." if len(question_texts[i]) > 300 else f"Question: {question_texts[i]}")
             print(f"Answer:   {answer_texts[i][:300]}..." if len(answer_texts[i]) > 300 else f"Answer:   {answer_texts[i]}")
             print(f"Prediction: {predictions[i][:300]}..." if len(predictions[i]) > 300 else f"Prediction: {predictions[i]}")
-        print(f"{'='*80}\n")
+        print("=" * 80 + "\n")
 
     def validation_step(self, batch, batch_idx):
         outputs = self(batch)

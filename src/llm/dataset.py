@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, ConcatDataset
 import random
 import yaml
 import os.path as osp
+from termcolor import colored
 
 import sys; sys.path.append('.')
 from src.llm.utils import conversation as conversation_lib
@@ -175,15 +176,14 @@ def preprocess(
 
         if cur_len < tokenizer.model_max_length:
             if cur_len != total_len:
-                print(' ==================== ')
-                print(targets)
-                print(input_ids)
-                print(' ==================== ')
+                print(colored(' ==================== ', "yellow"))
+                print(colored(str(targets), "yellow"))
+                print(colored(str(input_ids), "yellow"))
+                print(colored(' ==================== ', "yellow"))
                 target[:] = IGNORE_INDEX
-                print(
-                    f"WARNING: tokenization mismatch precess_v3: {cur_len} vs. {total_len}."
-                    f" (ignored)"
-                )
+                print(colored("[WARNING]", "yellow") +
+                    f" tokenization mismatch precess_v3: {cur_len} vs. {total_len}."
+                    f" (ignored)")
 
     return dict(
         input_ids=input_ids,
@@ -213,7 +213,7 @@ class WaveCaptionDataset(Dataset):
         self.opt = self._load_config(data_root, split)
         self.data = self._load_data()
         
-        print(f"load {len(self.data)} data as {self.split} set")
+        print(colored("[INFO]", "green") + f" load {len(self.data)} data as {self.split} set")
     
     def _load_config(self, data_root, split):
         """Load configuration based on split type."""
@@ -456,21 +456,21 @@ if __name__ == "__main__":
     #     print(f"Wave embed shape: {train_item['wave_embed'].shape}")
     
     # Test test mode
-    print("\n=== TEST MODE ===")
+    print(colored("\n=== TEST MODE ===", "cyan"))
     test_dataset = WaveCaptionDataset(data_root=data_root, split="test_QAs", tokenizer=tokenizer)
     
     test_item = test_dataset[0]
-    print("---")
-    print(f"Question: {test_item['question']}")
-    print(f"Answer: {test_item['answer']}")
+    print(colored("---", "cyan"))
+    print(colored(f"[DEBUG] Question: {test_item['question']}", "cyan"))
+    print(colored(f"[DEBUG] Answer: {test_item['answer']}", "cyan"))
     
     test_item = test_dataset[1]
-    print("---")
-    print(f"Question: {test_item['question']}")
-    print(f"Answer: {test_item['answer']}")
+    print(colored("---", "cyan"))
+    print(colored(f"[DEBUG] Question: {test_item['question']}", "cyan"))
+    print(colored(f"[DEBUG] Answer: {test_item['answer']}", "cyan"))
     
     test_item = test_dataset[2]
-    print("---")
-    print(f"Question: {test_item['question']}")
-    print(f"Answer: {test_item['answer']}")
+    print(colored("---", "cyan"))
+    print(colored(f"[DEBUG] Question: {test_item['question']}", "cyan"))
+    print(colored(f"[DEBUG] Answer: {test_item['answer']}", "cyan"))
     

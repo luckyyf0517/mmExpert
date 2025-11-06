@@ -4,11 +4,11 @@ import argparse
 import os
 import warnings
 from datetime import datetime
+from termcolor import colored
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DeepSpeedStrategy
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from swanlab.integration.pytorch_lightning import SwanLabLogger
-import swanlab
 
 # Ignore SwanLab warning about experiment already in progress
 warnings.filterwarnings('ignore', message='.*There is a swanlab experiment already in progress.*')
@@ -18,6 +18,37 @@ from src.llm.utils.config_loader import load_yaml_config
 from src.llm.utils.deepspeed_utils import add_deepspeed_args, get_train_ds_config
 from src.llm.datamodule import WaveLLMDataModule
 from src.llm.trainer import WaveLLMTrainer
+
+
+def is_rank_0():
+    """Check if current process is rank 0"""
+    try:
+        import torch.distributed as dist
+        if dist.is_initialized():
+            return dist.get_rank() == 0
+    except Exception:
+        pass
+    # Fallback to environment variable
+    rank = os.environ.get('RANK', None)
+    if rank is not None:
+        return int(rank) == 0
+    # Default to True if not in distributed mode
+    return True
+
+
+def log_info(message):
+    """Print info message only on rank 0"""
+    if is_rank_0():
+        print(colored("[INFO]", "green") + f" {message}")
+
+
+def override_config(cfg_obj, attr_name, arg_value, arg_name):
+    """Override config attribute with command line argument if provided"""
+    if arg_value is not None:
+        setattr(cfg_obj, attr_name, arg_value)
+        log_info(f"Using {arg_name} from command line: {arg_value}")
+    elif not hasattr(cfg_obj, attr_name) or getattr(cfg_obj, attr_name) is None:
+        raise ValueError(f"{arg_name} must be provided either via --{arg_name} argument or in config file")
 
 
 def parse_args():
@@ -68,57 +99,33 @@ def main():
 
     # Override data_root if provided via command line
     if args.data_root is not None:
-        # Update both data_cfg.data_root and model_cfg.encoder_path
         cfg.data_cfg.data_root = args.data_root
         cfg.model_cfg.encoder_path = args.data_root
-        print(f"Using data_root from command line: {args.data_root}")
+        log_info(f"Using data_root from command line: {args.data_root}")
     else:
-        # Check if data_root is set in config file
-        if not cfg.data_cfg.data_root or cfg.data_cfg.data_root == "":
+        if not cfg.data_cfg.data_root:
             raise ValueError("data_root must be provided either via --data_root argument or in config file")
-        # Update encoder_path to match data_root if not already set
-        if not cfg.model_cfg.encoder_path or cfg.model_cfg.encoder_path == "":
+        if not cfg.model_cfg.encoder_path:
             cfg.model_cfg.encoder_path = cfg.data_cfg.data_root
 
-    # Override training parameters if provided via command line, otherwise use config file values
-    if args.batch_size is not None:
-        cfg.data_cfg.batch_size = args.batch_size
-        print(f"Using batch_size from command line: {args.batch_size}")
-    elif not hasattr(cfg.data_cfg, 'batch_size') or cfg.data_cfg.batch_size is None:
-        raise ValueError("batch_size must be provided either via --batch_size argument or in config file")
-    
-    if args.num_workers is not None:
-        cfg.data_cfg.num_workers = args.num_workers
-        print(f"Using num_workers from command line: {args.num_workers}")
-    elif not hasattr(cfg.data_cfg, 'num_workers') or cfg.data_cfg.num_workers is None:
-        raise ValueError("num_workers must be provided either via --num_workers argument or in config file")
-    
-    if args.max_epochs is not None:
-        cfg.training.max_epochs = args.max_epochs
-        print(f"Using max_epochs from command line: {args.max_epochs}")
-    elif not hasattr(cfg.training, 'max_epochs') or cfg.training.max_epochs is None:
-        raise ValueError("max_epochs must be provided either via --max_epochs argument or in config file")
-    
-    if args.gradient_accumulation_steps is not None:
-        cfg.training.gradient_accumulation_steps = args.gradient_accumulation_steps
-        print(f"Using gradient_accumulation_steps from command line: {args.gradient_accumulation_steps}")
-    elif not hasattr(cfg.training, 'gradient_accumulation_steps') or cfg.training.gradient_accumulation_steps is None:
-        raise ValueError("gradient_accumulation_steps must be provided either via --gradient_accumulation_steps argument or in config file")
+    # Override training parameters if provided via command line
+    override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
+    override_config(cfg.data_cfg, 'num_workers', args.num_workers, 'num_workers')
+    override_config(cfg.training, 'max_epochs', args.max_epochs, 'max_epochs')
+    override_config(cfg.training, 'gradient_accumulation_steps', args.gradient_accumulation_steps, 'gradient_accumulation_steps')
 
     # Set seeds
     pl.seed_everything(args.seed)
 
     # Add timestamp prefix to log_dir
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir_path = cfg.log_dir
-    log_dir_parent = os.path.dirname(log_dir_path)
-    log_dir_name = os.path.basename(log_dir_path)
-    log_dir_with_timestamp = os.path.join(log_dir_parent, f"{timestamp}_{log_dir_name}")
-    cfg.log_dir = log_dir_with_timestamp
-    print(f"Using log directory: {cfg.log_dir}")
+    log_dir_parent = os.path.dirname(cfg.log_dir)
+    log_dir_name = os.path.basename(cfg.log_dir)
+    cfg.log_dir = os.path.join(log_dir_parent, f"{timestamp}_{log_dir_name}")
+    log_info(f"Using log directory: {cfg.log_dir}")
     
     # Extract experiment name from log_dir (the directory name with timestamp)
-    experiment_name = os.path.basename(log_dir_with_timestamp)
+    experiment_name = os.path.basename(cfg.log_dir)
 
     # Initialize data module
     data_module = WaveLLMDataModule(cfg.data_cfg)
@@ -147,20 +154,6 @@ def main():
     ]
     
     # Setup SwanLab logger
-    # Ensure previous SwanLab experiment is finished before creating new logger
-    import time
-    try:
-        swanlab.finish()
-        # Wait a moment to ensure the previous experiment is fully closed
-        time.sleep(0.5)
-    except Exception:
-        # If finish fails, try to clear any existing experiment
-        try:
-            swanlab.finish()
-            time.sleep(0.5)
-        except Exception:
-            pass
-    
     swanlab_logger = SwanLabLogger(name=experiment_name, project='mmExpert-LLM')
 
     # Create DeepSpeed strategy
@@ -194,13 +187,13 @@ def main():
 
     # Train or test
     if not args.test:
-        print("🚀 Starting training...")
+        log_info("Starting training...")
         trainer.fit(model, datamodule=data_module)
-        print("✅ Training completed successfully")
+        log_info("Training completed successfully")
     else:
-        print("🧪 Running test...")
+        log_info("Running test...")
         trainer.test(model, datamodule=data_module)
-        print("✅ Testing completed successfully")
+        log_info("Testing completed successfully")
 
 
 if __name__ == "__main__":
