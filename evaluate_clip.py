@@ -413,7 +413,7 @@ class CLIPEvaluator:
                     pred_idx = sorted_indices[j].item()
                     pred_caption = captions[pred_idx]
                     pred_score = similarity_matrix[i, pred_idx].item()
-                    is_correct = "✅" if pred_idx == i else "❌"
+                    is_correct = "CORRECT" if pred_idx == i else "WRONG"
                     print(f"      {j+1}. {is_correct} [{pred_score:.4f}] {pred_caption}")
 
         # Evaluate Text→Radar retrieval

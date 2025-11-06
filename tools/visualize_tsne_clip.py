@@ -367,7 +367,8 @@ class CLIPTSNEVisualizer:
         text_output_path = os.path.join(output_dir, f'tsne_text_{words_safe}.png')
         self.visualize_tsne(text_features, labels, words, 'text', text_output_path)
         
-        print(f"\n✅ Visualization complete!")
+        from termcolor import colored
+        print(f"\n{colored('[INFO] Visualization complete!', 'green')}")
         print(f"  - Radar t-SNE: {radar_output_path}")
         print(f"  - Text t-SNE: {text_output_path}")
         print(f"  - Total items: {len(indices)}")

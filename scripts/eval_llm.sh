@@ -52,20 +52,20 @@ done
 
 # Check required arguments
 if [ -z "$MODEL_CHECKPOINT" ]; then
-    echo "❌ Error: --model_checkpoint is required"
+    echo -e "\033[31m[ERROR]\033[0m Error: --model_checkpoint is required"
     echo "Usage: bash scripts/eval_llm.sh --model_checkpoint path/to/checkpoint.ckpt"
     exit 1
 fi
 
 # Check if model checkpoint exists
 if [ ! -f "$MODEL_CHECKPOINT" ]; then
-    echo "❌ Error: Model checkpoint not found: $MODEL_CHECKPOINT"
+    echo -e "\033[31m[ERROR]\033[0m Error: Model checkpoint not found: $MODEL_CHECKPOINT"
     exit 1
 fi
 
 # Check if data directory exists
 if [ ! -d "$DATA_ROOT" ]; then
-    echo "❌ Error: Data directory not found: $DATA_ROOT"
+    echo -e "\033[31m[ERROR]\033[0m Error: Data directory not found: $DATA_ROOT"
     exit 1
 fi
 
@@ -79,7 +79,7 @@ CMD="python eval_llm.py \
     --max_new_tokens ${MAX_NEW_TOKENS} \
     --temperature ${TEMPERATURE}"
 
-echo "🚀 Starting evaluation..."
+echo -e "\033[32m[INFO]\033[0m Starting evaluation..."
 echo "Model: ${MODEL_CHECKPOINT}"
 echo "Data: ${DATA_ROOT}"
 echo "Output: ${OUTPUT_FILE}"

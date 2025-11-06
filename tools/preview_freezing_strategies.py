@@ -45,7 +45,7 @@ def load_config_file(config_path):
             config = yaml.safe_load(f)
         return config
     except Exception as e:
-        print(f"❌ Error loading config {config_path}: {e}")
+        print(colored("[ERROR] Error loading config:", 'red') + f" {config_path}: {e}")
         return None
 
 
@@ -110,7 +110,7 @@ def get_layer_freeze_status(encoder):
 def test_strategy(model_name, strategy_name, strategy_params, embed_dim=256):
     """Test a specific freezing strategy."""
     print(f"\n{'='*80}")
-    print(colored(f"[TEST] Testing: {strategy_name}", 'yellow'))
+    print(colored(f"[INFO] Testing: {strategy_name}", 'green'))
     print(f"   Model: {model_name}")
     print(f"   Params: {strategy_params}")
     print(f"{'='*80}\n")
@@ -127,11 +127,11 @@ def test_strategy(model_name, strategy_name, strategy_params, embed_dim=256):
             **strategy_params
         )
 
-        print("✅ Encoder created successfully!\n")
+        print(colored("[INFO] Encoder created successfully!\n", 'green'))
         return encoder
 
     except Exception as e:
-        print(f"❌ Error creating encoder: {e}\n")
+        print(colored("[ERROR] Error creating encoder:", 'red') + f" {e}\n")
         return None
 
 
@@ -139,7 +139,7 @@ def test_config_file(config_path):
     """Test a configuration file by loading it and creating the text encoder."""
     config_name = os.path.basename(config_path)
     print(f"\n{'='*80}")
-    print(colored(f"[CONFIG] Testing Config: {config_name}", 'blue'))
+    print(colored(f"[INFO] Testing Config: {config_name}", 'green'))
     print(f"   Path: {config_path}")
     print(f"{'='*80}\n")
 
@@ -151,15 +151,15 @@ def test_config_file(config_path):
     # Extract text encoder parameters
     result = extract_text_encoder_params(config)
     if result is None:
-        print("❌ Could not extract text encoder parameters from config\n")
+        print(colored("[ERROR] Could not extract text encoder parameters from config\n", 'red'))
         return False
 
     model_name, embed_dim, encoder_params = result
     if model_name is None:
-        print("❌ No model name found in config\n")
+        print(colored("[ERROR] No model name found in config\n", 'red'))
         return False
 
-    print(colored(f"[PARAMETERS] Extracted Parameters:", 'cyan'))
+    print(colored(f"[DEBUG] Extracted Parameters:", 'cyan'))
     print(f"   Model: {model_name}")
     print(f"   Embed Dim: {embed_dim}")
     print(f"   Encoder Params: {encoder_params}\n")
@@ -183,10 +183,10 @@ def test_config_directory(config_dir):
 
     config_files = find_config_files(config_dir)
     if not config_files:
-        print(f"❌ No YAML config files found in {config_dir}")
+        print(colored("[ERROR] No YAML config files found in", 'red') + f" {config_dir}")
         return
 
-    print(colored(f"[FOUND] Found {len(config_files)} configuration files\n", 'green'))
+    print(colored(f"[INFO] Found {len(config_files)} configuration files\n", 'green'))
 
     success_count = 0
     total_count = len(config_files)
@@ -196,7 +196,7 @@ def test_config_directory(config_dir):
             success_count += 1
 
     print(f"\n{'='*80}")
-    print(colored(f"[SUMMARY] Summary: {success_count}/{total_count} configs tested successfully", 'blue'))
+    print(colored(f"[INFO] Summary: {success_count}/{total_count} configs tested successfully", 'green'))
     print(f"{'='*80}\n")
 
 
@@ -223,7 +223,7 @@ def run_all_strategies(model_name):
 def test_forward_pass(model_name, strategy_params, embed_dim=256):
     """Test if the encoder works with forward pass."""
     print(f"\n{'='*80}")
-    print(colored(f"[FORWARD] Testing Forward Pass", 'magenta'))
+    print(colored(f"[INFO] Testing Forward Pass", 'green'))
     print(f"   Model: {model_name}")
     print(f"   Strategy: {strategy_params}")
     print(f"{'='*80}\n")
@@ -263,7 +263,7 @@ def test_forward_pass(model_name, strategy_params, embed_dim=256):
         with torch.no_grad():
             result = encoder.encode(modality_data, return_sequence=False)
 
-        print(f"✅ Forward pass successful!")
+        print(colored("[INFO] Forward pass successful!", 'green'))
         print(f"   Output Shape: {result.features.shape}")
         print(f"   Expected: [batch_size={len(sample_texts)}, embed_dim={embed_dim}]")
 
@@ -274,13 +274,13 @@ def test_forward_pass(model_name, strategy_params, embed_dim=256):
             print(f"   ✗ Shape mismatch!\n")
 
     except Exception as e:
-        print(f"❌ Error during forward pass: {e}\n")
+        print(colored("[ERROR] Error during forward pass:", 'red') + f" {e}\n")
 
 
 def compare_strategies(model_name):
     """Compare different strategies side by side."""
     print(f"\n{'='*80}")
-    print(colored(f"[COMPARE] Strategy Comparison: {model_name}", 'cyan'))
+    print(colored(f"[INFO] Strategy Comparison: {model_name}", 'green'))
     print(f"{'='*80}\n")
     
     strategies = [
@@ -411,7 +411,7 @@ Examples:
     # Handle config file testing
     if args.config:
         if not os.path.exists(args.config):
-            print(f"❌ Config file not found: {args.config}")
+            print(colored("[ERROR] Config file not found:", 'red') + f" {args.config}")
             return
 
         test_config_file(args.config)
@@ -419,7 +419,7 @@ Examples:
 
     if args.config_dir:
         if not os.path.exists(args.config_dir):
-            print(f"❌ Config directory not found: {args.config_dir}")
+            print(colored("[ERROR] Config directory not found:", 'red') + f" {args.config_dir}")
             return
 
         test_config_directory(args.config_dir)
@@ -452,8 +452,8 @@ Examples:
             test_forward_pass(model_name, strategy_params)
     else:
         # Default: run all strategies
-        print(colored("[TIP] Tip: Use --compare for side-by-side comparison, or --all for detailed tests", 'yellow'))
-        print(colored("[TIP] To test config files, use --config or --config-dir", 'yellow'))
+        print(colored("[INFO] Tip: Use --compare for side-by-side comparison, or --all for detailed tests", 'green'))
+        print(colored("[INFO] To test config files, use --config or --config-dir", 'green'))
         run_all_strategies(model_name)
 
 

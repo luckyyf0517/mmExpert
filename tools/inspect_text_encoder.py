@@ -47,7 +47,7 @@ def count_parameters(module):
 def analyze_model_structure(model_name, verbose=False):
     """Analyze and display the structure of a text encoder model."""
     print(f"\n{'='*80}")
-    print(colored(f"[ANALYZE] Analyzing Model: {model_name}", 'cyan'))
+    print(colored(f"[INFO] Analyzing Model: {model_name}", 'green'))
     print(f"{'='*80}\n")
     
     try:
@@ -60,14 +60,14 @@ def analyze_model_structure(model_name, verbose=False):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         
-        print(f"✅ Model loaded successfully!\n")
+        print(colored("[INFO] Model loaded successfully!\n", 'green'))
         
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
+        print(colored("[ERROR] Error loading model:", 'red') + f" {e}")
         return
     
     # 1. Overall Statistics
-    print(colored("[STATISTICS] Overall Statistics", 'blue'))
+    print(colored("[INFO] Overall Statistics", 'green'))
     print("-" * 80)
     total_params, trainable_params = count_parameters(model)
     print(f"Total Parameters: {total_params:,}")
@@ -84,7 +84,7 @@ def analyze_model_structure(model_name, verbose=False):
     print()
     
     # 2. Layer Structure Overview
-    print(colored("[STRUCTURE] Layer Structure Overview", 'magenta'))
+    print(colored("[INFO] Layer Structure Overview", 'green'))
     print("-" * 80)
     
     layer_info = []
@@ -113,7 +113,7 @@ def analyze_model_structure(model_name, verbose=False):
     
     # 3. Detailed Transformer Layers
     if hasattr(model, 'encoder') and hasattr(model.encoder, 'layer'):
-        print(colored("[LAYERS] Transformer Layers Breakdown", 'yellow'))
+        print(colored("[INFO] Transformer Layers Breakdown", 'green'))
         print("-" * 80)
         
         layers_data = []
@@ -131,14 +131,14 @@ def analyze_model_structure(model_name, verbose=False):
         print()
     
     # 4. Freezing Recommendations
-    print(colored("[RECOMMENDATIONS] Freezing Strategy Recommendations (New unfreeze_last_layers Option)", 'green'))
+    print(colored("[INFO] Freezing Strategy Recommendations (New unfreeze_last_layers Option)", 'green'))
     print("-" * 80)
     
     if hasattr(model.config, 'num_hidden_layers'):
         num_layers = model.config.num_hidden_layers
         
         recommendations = [
-            ["Small Dataset (<5K)", "unfreeze_last_layers: 1", f"Train last 1/{num_layers} layer + projection (Recommended ⭐)"],
+            ["Small Dataset (<5K)", "unfreeze_last_layers: 1", f"Train last 1/{num_layers} layer + projection (Recommended)"],
             ["Medium Dataset (5K-50K)", "unfreeze_last_layers: 2", f"Train last 2/{num_layers} layers + projection"],
             ["Large Dataset (>50K)", "unfreeze_last_layers: 3", f"Train last 3/{num_layers} layers + projection"],
             ["Very Large Dataset", "freeze_backbone: false", "Fine-tune all layers"],
@@ -162,7 +162,7 @@ def analyze_model_structure(model_name, verbose=False):
     
     # 5. Detailed Parameter List (verbose mode)
     if verbose:
-        print(colored("[PARAMETERS] Detailed Parameter List", 'white'))
+        print(colored("[DEBUG] Detailed Parameter List", 'cyan'))
         print("-" * 80)
         
         param_list = []
@@ -180,14 +180,14 @@ def analyze_model_structure(model_name, verbose=False):
         print()
     
     # 6. Example Configuration Usage
-    print(colored("[CONFIG] Example Configuration Usage", 'blue'))
+    print(colored("[INFO] Example Configuration Usage", 'green'))
     print("-" * 80)
     
     examples = []
     
     # unfreeze_last_layers examples (Most intuitive)
-    examples.append(["🌟 Recommended", "unfreeze_last_layers: 1", "Train only last layer + projection"])
-    examples.append(["🌟 Recommended", "unfreeze_last_layers: 2", "Train last 2 layers + projection"])
+    examples.append(["[INFO] Recommended", "unfreeze_last_layers: 1", "Train only last layer + projection"])
+    examples.append(["[INFO] Recommended", "unfreeze_last_layers: 2", "Train last 2 layers + projection"])
     
     # freeze_layers examples
     if hasattr(model.config, 'num_hidden_layers'):
@@ -207,7 +207,7 @@ def analyze_model_structure(model_name, verbose=False):
     print()
     
     # 7. Test a sample input
-    print(colored("[TEST] Testing Model with Sample Input", 'yellow'))
+    print(colored("[INFO] Testing Model with Sample Input", 'green'))
     print("-" * 80)
     
     try:
@@ -221,10 +221,10 @@ def analyze_model_structure(model_name, verbose=False):
             print(f"Input: '{sample_text}'")
             print(f"Output Shape: {outputs.last_hidden_state.shape}")
             print(f"Hidden Size: {outputs.last_hidden_state.shape[-1]}")
-            print("✅ Model works correctly!")
+            print(colored("[INFO] Model works correctly!", 'green'))
         
     except Exception as e:
-        print(f"⚠️  Warning: Could not test model: {e}")
+        print(colored("[WARNING] Warning: Could not test model:", 'yellow') + f" {e}")
     
     print()
 
@@ -232,7 +232,7 @@ def analyze_model_structure(model_name, verbose=False):
 def list_common_models():
     """List common text encoder models."""
     print("\n" + "="*80)
-    print(colored("[MODELS] Common Text Encoder Models", 'magenta'))
+    print(colored("[INFO] Common Text Encoder Models", 'green'))
     print("="*80 + "\n")
     
     data = [[alias, model_name] for alias, model_name in COMMON_MODELS.items()]

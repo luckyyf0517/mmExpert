@@ -30,9 +30,9 @@ for config in "${CONFIGS[@]}"; do
         --model-config "$CONFIG_DIR/$config"
     
     if [ $? -eq 0 ]; then
-        echo "✅ $config completed"
+        echo -e "\033[32m[INFO]\033[0m $config completed"
     else
-        echo "❌ $config failed"
+        echo -e "\033[31m[ERROR]\033[0m $config failed"
     fi
 done
 

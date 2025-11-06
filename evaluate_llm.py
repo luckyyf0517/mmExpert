@@ -135,7 +135,7 @@ class WaveLLMEvaluator:
         """Evaluate on entire dataset"""
         results = {}
 
-        print(f"📊 Evaluating {len(dataset)} samples...")
+        print(f"Evaluating {len(dataset)} samples...")
 
         for i in tqdm(range(0, len(dataset), batch_size)):
             batch = dataset[i:i+batch_size]
@@ -170,7 +170,7 @@ class WaveLLMEvaluator:
         with open(output_file, 'w') as f:
             json.dump(results, f, indent=2)
 
-        print(f"✅ Results saved to {output_file}")
+        print(f"Results saved to {output_file}")
         return results
 
 
@@ -202,18 +202,18 @@ def main():
 
     # Check if model checkpoint exists
     if not os.path.exists(args.model_checkpoint):
-        print(f"❌ Model checkpoint not found: {args.model_checkpoint}")
+        print(colored("[ERROR]", "red") + f" Model checkpoint not found: {args.model_checkpoint}")
         return
 
     # Initialize evaluator
-    print(f"🚀 Loading model from {args.model_checkpoint}")
+    print(f"Loading model from {args.model_checkpoint}")
     evaluator = WaveLLMEvaluator(
         model_path=args.model_checkpoint,
         encoder_path=args.data_root  # Assuming encoder is in data_root
     )
 
     # Load dataset
-    print(f"📂 Loading dataset from {args.data_root}")
+    print(f"Loading dataset from {args.data_root}")
     from src.llm.dataset import WaveCaptionDataset
     dataset = WaveCaptionDataset(
         data_root=args.data_root,
@@ -224,17 +224,17 @@ def main():
     # Limit dataset size if specified
     if args.num_samples is not None:
         dataset = dataset[:args.num_samples]
-        print(f"📊 Limited to {len(dataset)} samples")
+        print(f"Limited to {len(dataset)} samples")
 
     # Evaluate
-    print("🔍 Starting evaluation...")
+    print("Starting evaluation...")
     results = evaluator.evaluate_dataset(
         dataset=dataset,
         output_file=args.output_file,
         batch_size=args.batch_size
     )
 
-    print(f"✅ Evaluation completed! Results saved to {args.output_file}")
+    print(f"Evaluation completed! Results saved to {args.output_file}")
 
 
 if __name__ == "__main__":

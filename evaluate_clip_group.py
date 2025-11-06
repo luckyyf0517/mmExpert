@@ -149,10 +149,10 @@ class CLIPGroupEvaluator:
             }
 
             if not self.verbose:
-                print("✅ Done")
+                print(colored("[INFO] Done", 'green'))
 
         except Exception as e:
-            error_msg = f"❌ Failed: {str(e)}"
+            error_msg = colored("[ERROR] Failed:", 'red') + f" {str(e)}"
             if self.verbose:
                 print(error_msg)
             else:
@@ -174,14 +174,14 @@ class CLIPGroupEvaluator:
             self.evaluate_single_model(version)
 
         print("\n" + "=" * 80)
-        print("✅ Group evaluation complete!")
+        print(colored("[INFO] Group evaluation complete!", 'green'))
 
     def format_results(self):
         """Format results for comparison display"""
         successful_results = {k: v for k, v in self.results.items() if v['status'] == 'success'}
 
         if not successful_results:
-            print("❌ No successful evaluations to display!")
+            print(colored("[ERROR] No successful evaluations to display!", 'red'))
             return
 
         # Create comparison table
@@ -255,7 +255,7 @@ class CLIPGroupEvaluator:
         # Show failed models
         failed_models = {k: v for k, v in self.results.items() if v['status'] == 'failed'}
         if failed_models:
-            print(f"\n❌ Failed models:")
+            print(f"\n" + colored("[ERROR] Failed models:", 'red'))
             for version_name, data in failed_models.items():
                 print(f"   {version_name}: {data['error']}")
 

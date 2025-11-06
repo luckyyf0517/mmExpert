@@ -106,7 +106,7 @@ if __name__ == '__main__':
         try:
             # Validate model config
             model_cfg = cfg.model_cfg
-            print("✅ Model configuration loaded successfully")
+            print("Model configuration loaded successfully")
             print(f"   - Model type: {model_cfg.target}")
             print(f"   - Max epochs: {model_cfg.params.max_epochs}")
             print(f"   - Learning rate: {model_cfg.params.learning_rate}")
@@ -114,22 +114,22 @@ if __name__ == '__main__':
 
             # Validate data config
             data_cfg = cfg.data_cfg
-            print("✅ Data configuration loaded successfully")
+            print("Data configuration loaded successfully")
             print(f"   - Dataset: {data_cfg.target}")
             print(f"   - Batch size: {data_cfg.params.cfg.batch_size}")
 
             # Test model instantiation (minimal)
-            print("✅ Testing model instantiation...")
+            print("Testing model instantiation...")
             model = instantiate_from_config(model_cfg)
             print(f"   - Model instantiated: {type(model).__name__}")
 
             # Test data loading (minimal)
-            print("✅ Testing data loading...")
+            print("Testing data loading...")
             data = instantiate_from_config(data_cfg)
             print(f"   - Data module instantiated: {type(data).__name__}")
 
             # Test forward pass with minimal data
-            print("✅ Testing forward pass...")
+            print("Testing forward pass...")
             data.setup('fit')
 
             # Get single batch for testing
