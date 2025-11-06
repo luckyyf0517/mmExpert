@@ -1,6 +1,7 @@
 """DeepSpeed utilities for LLM training"""
 
 import argparse
+import os
 
 
 def get_train_ds_config(args):
@@ -12,10 +13,13 @@ def get_train_ds_config(args):
     Returns:
         dict: DeepSpeed configuration dictionary
     """
+    # Get world_size from environment if available (set by deepspeed launcher), otherwise use args
+    world_size = int(os.environ.get('WORLD_SIZE', args.world_size))
+    
     ds_config = {
-        "train_batch_size": args.batch_size * args.world_size,
+        "train_batch_size": args.batch_size * world_size,
         "train_micro_batch_size_per_gpu": args.batch_size,
-        "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        # gradient_accumulation_steps is handled by PyTorch Lightning's accumulate_grad_batches
         "zero_optimization": {
             "stage": args.zero_stage,
             "offload_optimizer": {
@@ -89,9 +93,5 @@ def add_deepspeed_args(parser):
                         help='Training data type')
     parser.add_argument('--world_size', type=int, default=1,
                         help='Number of processes for distributed training')
-    parser.add_argument('--batch_size', type=int, default=8,
-                        help='Batch size per GPU')
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
-                        help='Number of steps to accumulate gradients')
 
     return parser

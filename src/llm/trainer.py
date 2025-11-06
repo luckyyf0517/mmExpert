@@ -212,14 +212,18 @@ class WaveLLMTrainer(pl.LightningModule):
         """
         batch_size = len(mmwave_features_list)
 
+        # Get model dtype to ensure type consistency
+        model_dtype = next(self.model.parameters()).dtype
+        
         # Process each sample through radar encoder
         all_features = []
         for i, wave_data in enumerate(mmwave_features_list):
             # Prepare input for encoder (format expected by radar encoder)
+            # Convert input to float32 to avoid dtype mismatch in frozen encoder
             encoder_input = {
-                'range_time': wave_data['range_time'].unsqueeze(0),  # Add batch dim
-                'doppler_time': wave_data['doppler_time'].unsqueeze(0),
-                'azimuth_time': wave_data['azimuth_time'].unsqueeze(0)
+                'range_time': wave_data['range_time'].unsqueeze(0).to(dtype=torch.float32),  # Add batch dim
+                'doppler_time': wave_data['doppler_time'].unsqueeze(0).to(dtype=torch.float32),
+                'azimuth_time': wave_data['azimuth_time'].unsqueeze(0).to(dtype=torch.float32)
             }
 
             # Forward through radar encoder
@@ -229,22 +233,25 @@ class WaveLLMTrainer(pl.LightningModule):
             
             with torch.no_grad():  # Radar encoder is frozen
                 result = self.radar_encoder.encode(modality_data, return_sequence=True)
-                encoder_output = result.features  # [1, T, D]
+                # Use sequence_features instead of features when return_sequence=True
+                encoder_output = result.sequence_features if result.sequence_features is not None else result.features  # [1, T, D]
 
             # The encoder should output [1, T, D] features
             features = encoder_output.squeeze(0)  # Remove batch dim -> [T, D]
+            # Convert to model dtype after encoding
+            features = features.to(dtype=model_dtype)
             all_features.append(features)
 
         # Pad or stack features to have consistent sequence length
         max_len = max(feat.shape[0] for feat in all_features)
 
-        # Pad features to max length
+        # Pad features to max length (features already converted to model_dtype above)
         padded_features = []
         for feat in all_features:
             if feat.shape[0] < max_len:
-                # Pad with zeros
+                # Pad with zeros (using same dtype as feat)
                 pad_size = max_len - feat.shape[0]
-                padding = torch.zeros(pad_size, feat.shape[1], device=feat.device)
+                padding = torch.zeros(pad_size, feat.shape[1], device=feat.device, dtype=feat.dtype)
                 padded_feat = torch.cat([feat, padding], dim=0)
             else:
                 padded_feat = feat
@@ -273,16 +280,21 @@ class WaveLLMTrainer(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
+        # Convert learning_rate and weight_decay to float in case they're strings from YAML
+        learning_rate = float(self.cfg.training.learning_rate)
+        weight_decay = float(self.cfg.training.weight_decay)
+        warmup_steps = int(self.cfg.training.warmup_steps)
+        
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.cfg.training.learning_rate,
-            weight_decay=self.cfg.training.weight_decay,
+            lr=learning_rate,
+            weight_decay=weight_decay,
             betas=(0.9, 0.98)
         )
 
         scheduler = get_cosine_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=self.cfg.training.warmup_steps,
+            num_warmup_steps=warmup_steps,
             num_training_steps=self.trainer.estimated_stepping_batches,
             num_cycles=0.5
         )

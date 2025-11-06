@@ -232,9 +232,11 @@ class RadarEncoderViT(BaseEncoder):
     def _ensure_sequence_projection(self):
         """Lazily create sequence projection layer when needed."""
         if self.sequence_projection is None:
-            # Get device from existing parameters to ensure new layer is on correct device
-            device = next(self.parameters()).device
-            self.sequence_projection = nn.Linear(self.embed_dim, self.embed_dim).to(device)
+            # Get device and dtype from existing parameters to ensure new layer matches
+            first_param = next(self.parameters())
+            device = first_param.device
+            dtype = first_param.dtype
+            self.sequence_projection = nn.Linear(self.embed_dim, self.embed_dim).to(device=device, dtype=dtype)
             self._sequence_projection_enabled = True
 
             # Initialize the new layer

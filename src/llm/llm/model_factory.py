@@ -38,7 +38,7 @@ class ModelFactory:
         model = cls.MODEL_TYPES[model_type].from_pretrained(
             model_path,
             config=original_config,
-            torch_dtype=torch.bfloat16,
+            dtype=torch.bfloat16,
         )
 
         return model

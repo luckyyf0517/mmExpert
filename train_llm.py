@@ -2,10 +2,12 @@
 
 import argparse
 import os
+from datetime import datetime
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DeepSpeedStrategy
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
+from easydict import EasyDict
 from src.llm.utils.config_loader import load_yaml_config
 from src.llm.utils.deepspeed_utils import add_deepspeed_args, get_train_ds_config
 from src.llm.datamodule import WaveLLMDataModule
@@ -42,6 +44,10 @@ def parse_args():
 
     # DeepSpeed args
     parser = add_deepspeed_args(parser)
+    
+    # Local rank argument (automatically set by DeepSpeed launcher)
+    parser.add_argument('--local_rank', type=int, default=None,
+                        help='Local rank for distributed training (set by DeepSpeed launcher)')
 
     return parser.parse_args()
 
@@ -76,8 +82,8 @@ def main():
     if args.num_workers is not None:
         cfg.data_cfg.num_workers = args.num_workers
         print(f"Using num_workers from command line: {args.num_workers}")
-    elif not hasattr(cfg.data_cfg, 'num_workers'):
-        cfg.data_cfg.num_workers = 4  # Default value
+    elif not hasattr(cfg.data_cfg, 'num_workers') or cfg.data_cfg.num_workers is None:
+        raise ValueError("num_workers must be provided either via --num_workers argument or in config file")
     
     if args.max_epochs is not None:
         cfg.training.max_epochs = args.max_epochs
@@ -88,17 +94,30 @@ def main():
     if args.gradient_accumulation_steps is not None:
         cfg.training.gradient_accumulation_steps = args.gradient_accumulation_steps
         print(f"Using gradient_accumulation_steps from command line: {args.gradient_accumulation_steps}")
-    elif not hasattr(cfg.training, 'gradient_accumulation_steps'):
-        cfg.training.gradient_accumulation_steps = 1  # Default value
+    elif not hasattr(cfg.training, 'gradient_accumulation_steps') or cfg.training.gradient_accumulation_steps is None:
+        raise ValueError("gradient_accumulation_steps must be provided either via --gradient_accumulation_steps argument or in config file")
 
     # Set seeds
     pl.seed_everything(args.seed)
+
+    # Add timestamp prefix to log_dir
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_dir_path = cfg.log_dir
+    log_dir_parent = os.path.dirname(log_dir_path)
+    log_dir_name = os.path.basename(log_dir_path)
+    log_dir_with_timestamp = os.path.join(log_dir_parent, f"{timestamp}_{log_dir_name}")
+    cfg.log_dir = log_dir_with_timestamp
+    print(f"Using log directory: {cfg.log_dir}")
 
     # Initialize data module
     data_module = WaveLLMDataModule(cfg.data_cfg)
 
     # Create model (LightningModule)
-    model = WaveLLMTrainer(cfg.model_cfg)
+    # Pass model_cfg with training config added
+    model_cfg_dict = dict(cfg.model_cfg)
+    model_cfg_dict['training'] = EasyDict(cfg.training)
+    model_cfg_with_training = EasyDict(model_cfg_dict)
+    model = WaveLLMTrainer(model_cfg_with_training)
 
     # Setup callbacks
     callbacks = [
@@ -123,9 +142,11 @@ def main():
     )
 
     # Create trainer
+    # When using deepspeed launcher, devices can be auto-detected from environment
+    # But we still need world_size for DeepSpeed config calculation
     trainer = pl.Trainer(
         accelerator='gpu',
-        devices=args.world_size,
+        devices="auto",  # Auto-detect from deepspeed launcher
         strategy=strategy,
         precision='bf16-mixed',
         max_epochs=cfg.training.max_epochs,
