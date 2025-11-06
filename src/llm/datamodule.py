@@ -291,6 +291,10 @@ class WaveLLMDataModule(pl.LightningDataModule):
         input_ids = [item['input_ids'] for item in batch]
         labels = [item['labels'] for item in batch]
 
+        # Extract question and answer if available (for evaluation)
+        questions = [item.get('question', '') for item in batch]
+        answers = [item.get('answer', '') for item in batch]
+
         # Stack wave_embeds into [B, H, W] format for each view
         # Find max time dimension (W) for each view to pad to same length
         batch_size = len(wave_embeds)
@@ -359,12 +363,19 @@ class WaveLLMDataModule(pl.LightningDataModule):
             padded_labels.append(padded_lbl)
             attention_masks.append(attention_mask)
 
-        return {
+        result = {
             'mmwave_features': mmwave_features,  # Dict with [B, H, W] tensors
             'input_ids': torch.tensor(padded_input_ids, dtype=torch.long),
             'labels': torch.tensor(padded_labels, dtype=torch.long),
             'attention_mask': torch.tensor(attention_masks, dtype=torch.long)
         }
+        
+        # Add question and answer if available (for evaluation)
+        if any(questions) or any(answers):
+            result['questions'] = questions
+            result['answers'] = answers
+        
+        return result
 
     def train_dataloader(self):
         return DataLoader(

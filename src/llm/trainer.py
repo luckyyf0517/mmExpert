@@ -37,7 +37,6 @@ class WaveLLMTrainer(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.cfg = cfg
-        self.debug = getattr(cfg, 'debug', False)  # Enable debug mode to display Q&A/Prediction
 
         # Create model using ModelFactory
         self.model = ModelFactory.create_model(cfg.model_type, cfg.model)
@@ -282,28 +281,9 @@ class WaveLLMTrainer(pl.LightningModule):
         input_ids = batch['input_ids']
         labels = batch['labels']
         attention_mask = batch.get('attention_mask')
-        
-        # Debug: Print batch info (only in debug mode to avoid spam)
-        import os
-        if os.environ.get('DEBUG_BATCH_SIZE', '0') == '1':
-            print(colored("[DEBUG]", "cyan") + f" forward input_ids shape: {input_ids.shape}, batch_size: {input_ids.shape[0]}")
-            print(colored("[DEBUG]", "cyan") + f" forward labels shape: {labels.shape}, batch_size: {labels.shape[0]}")
-            if isinstance(batch['mmwave_features'], dict):
-                for key, tensor in batch['mmwave_features'].items():
-                    print(colored("[DEBUG]", "cyan") + f" forward mmwave_features['{key}'] shape: {tensor.shape}, batch_size: {tensor.shape[0]}")
-            elif isinstance(batch['mmwave_features'], list):
-                print(colored("[DEBUG]", "cyan") + f" forward mmwave_features list length: {len(batch['mmwave_features'])}")
-                if len(batch['mmwave_features']) > 0:
-                    first_feat = batch['mmwave_features'][0]
-                    for key, tensor in first_feat.items():
-                        print(colored("[DEBUG]", "cyan") + f" forward mmwave_features[0][{key}] shape: {tensor.shape}")
 
         # Process mmwave features through encoder and projection
         mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
-        
-        # Debug: Print processed mmwave embeds
-        if os.environ.get('DEBUG_BATCH_SIZE', '0') == '1':
-            print(colored("[DEBUG]", "cyan") + f" forward mmwave_embeds shape: {mmwave_embeds.shape}, batch_size: {mmwave_embeds.shape[0]}")
 
         # Forward pass with conversation-based input
         outputs = self.model(
@@ -372,114 +352,11 @@ class WaveLLMTrainer(pl.LightningModule):
         outputs = self(batch)
         loss = outputs['loss']
         
-        # Debug: Display Question, Answer, and Prediction for each batch
-        # Only print on rank 0 to avoid duplicate output in distributed training
-        if self.debug:
-            # Check if we're on rank 0 (only show debug output once)
-            try:
-                import torch.distributed as dist
-                rank = dist.get_rank() if dist.is_initialized() else 0
-            except:
-                rank = 0
-            if rank == 0:
-                self._debug_print_batch(batch, outputs, batch_idx)
-        
         # Explicitly specify batch_size to avoid inference from ambiguous collection
         batch_size = batch['input_ids'].shape[0]
         self.log('train/loss', loss, on_step=True, on_epoch=False,
                  prog_bar=True, sync_dist=True, batch_size=batch_size)
         return loss
-    
-    def _debug_print_batch(self, batch, outputs, batch_idx):
-        """Print Question, Answer, and Prediction for debugging"""
-        import torch
-        
-        # Get input_ids and labels
-        input_ids = batch['input_ids']
-        labels = batch['labels']
-        
-        # Extract Question and Answer from labels
-        # Labels have -100 for tokens that should be ignored (question part)
-        answer_texts = []
-        question_texts = []
-        
-        for i in range(input_ids.shape[0]):
-            # Get question: tokens before the first non-IGNORE_INDEX token in labels
-            label_seq = labels[i].cpu()
-            answer_start_idx = None
-            for j, token_id in enumerate(label_seq):
-                if token_id != -100:
-                    answer_start_idx = j
-                    break
-            
-            if answer_start_idx is not None:
-                # Question is everything before answer
-                question_ids = input_ids[i][:answer_start_idx].cpu()
-                question_text = self.tokenizer.decode(question_ids, skip_special_tokens=True)
-                question_texts.append(question_text)
-                
-                # Answer is the non-IGNORE_INDEX part of labels
-                answer_mask = label_seq != -100
-                answer_ids = label_seq[answer_mask]
-                answer_text = self.tokenizer.decode(answer_ids, skip_special_tokens=True)
-                answer_texts.append(answer_text)
-            else:
-                question_texts.append("")
-                answer_texts.append("")
-        
-        # Get prediction: generate from model output
-        # Re-run forward to get logits (without labels for generation)
-        predictions = []
-        with torch.no_grad():
-            # Temporarily set model to eval mode for inference
-            was_training = self.model.training
-            self.model.eval()
-            
-            try:
-                mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
-                model_outputs = self.model(
-                    input_ids=input_ids,
-                    mmwave_embeds=mmwave_embeds,
-                    attention_mask=batch.get('attention_mask')
-                )
-                logits = model_outputs.logits
-                
-                # Greedy decoding: take argmax
-                predicted_ids = torch.argmax(logits, dim=-1).cpu()
-                
-                # Extract prediction from the answer part (same as labels)
-                for i in range(input_ids.shape[0]):
-                    label_seq = labels[i].cpu()
-                    answer_start_idx = None
-                    for j, token_id in enumerate(label_seq):
-                        if token_id != -100:
-                            answer_start_idx = j
-                            break
-                    
-                    if answer_start_idx is not None:
-                        # Get predicted tokens for the answer part (same length as answer)
-                        answer_mask = label_seq != -100
-                        answer_length = answer_mask.sum().item()
-                        pred_answer_ids = predicted_ids[i][answer_start_idx:answer_start_idx+answer_length]
-                        pred_text = self.tokenizer.decode(pred_answer_ids, skip_special_tokens=True)
-                        predictions.append(pred_text)
-                    else:
-                        predictions.append("")
-            finally:
-                # Restore training mode
-                if was_training:
-                    self.model.train()
-        
-        # Print debug information
-        print("\n" + "=" * 80)
-        print(colored("[DEBUG]", "cyan") + f" Batch {batch_idx} (showing first 2 samples):")
-        print("=" * 80)
-        for i in range(min(2, len(question_texts))):
-            print(f"\n[Sample {i+1}]")
-            print(f"Question: {question_texts[i][:300]}..." if len(question_texts[i]) > 300 else f"Question: {question_texts[i]}")
-            print(f"Answer:   {answer_texts[i][:300]}..." if len(answer_texts[i]) > 300 else f"Answer:   {answer_texts[i]}")
-            print(f"Prediction: {predictions[i][:300]}..." if len(predictions[i]) > 300 else f"Prediction: {predictions[i]}")
-        print("=" * 80 + "\n")
 
     def validation_step(self, batch, batch_idx):
         outputs = self(batch)
@@ -517,3 +394,148 @@ class WaveLLMTrainer(pl.LightningModule):
                 "interval": "step",
             }
         }
+
+    def on_test_epoch_start(self):
+        """Initialize result JSON file at the start of test epoch"""
+        import os
+        import json
+        
+        # Get output file path from trainer or use default
+        if hasattr(self.trainer, 'default_root_dir') and self.trainer.default_root_dir:
+            checkpoint_dir = self.trainer.default_root_dir
+        else:
+            checkpoint_dir = getattr(self.cfg, 'log_dir', 'output')
+        
+        # Create evaluation directory
+        eval_dir = os.path.join(checkpoint_dir, "evaluation")
+        os.makedirs(eval_dir, exist_ok=True)
+        
+        # Get rank for distributed training
+        try:
+            import torch.distributed as dist
+            rank = dist.get_rank() if dist.is_initialized() else 0
+        except:
+            rank = 0
+        
+        self.output_file = os.path.join(eval_dir, f"results_rank_{rank}.json")
+        
+        # Initialize empty results file
+        with open(self.output_file, 'w', encoding='utf-8') as f:
+            json.dump({}, f, indent=2, ensure_ascii=False)
+        
+        if _is_rank_0():
+            print(colored("[INFO]", "green") + f" Initializing result file: {self.output_file}")
+        
+        self.test_max_new_tokens = getattr(self.cfg, 'test_max_new_tokens', 50)
+        self.test_temperature = getattr(self.cfg, 'test_temperature', 0.7)
+
+    def test_step(self, batch, batch_idx):
+        """Generate predictions and save to JSON file"""
+        import json
+        
+        # Generate predictions
+        preds = self._generate_response(batch)
+        
+        # Get questions and answers from batch (if available)
+        questions = batch.get('questions', [])
+        answers = batch.get('answers', [])
+        
+        from IPython import embed; embed(header='trainer.py:568')
+        
+        # Get batch size
+        batch_size = batch['input_ids'].shape[0]
+        
+        # Read current results
+        with open(self.output_file, 'r', encoding='utf-8') as f:
+            results = json.load(f)
+        
+        # Process each sample in batch
+        for i in range(batch_size):
+            # Use batch_idx and sample index within batch as unique identifier
+            sample_idx = batch_idx * batch_size + i
+            
+            # Get question and answer from batch (if available)
+            question = questions[i] if i < len(questions) else ''
+            answer = answers[i] if i < len(answers) else ''
+            
+            # Add result
+            results[f"sample_{sample_idx}"] = {
+                "question": question,
+                "answer": answer,
+                "prediction": preds[i] if i < len(preds) else ""
+            }
+            
+            # Print result (only on rank 0, print all samples)
+            if _is_rank_0():
+                print(colored(f"\n[Sample {sample_idx}]:", "cyan"))
+                if question:
+                    print(colored("Question:", "blue"), question)
+                print(colored("Prediction:", "green"), preds[i] if i < len(preds) else "")
+                if answer:
+                    print(colored("Ground Truth:", "yellow"), answer)
+                print("-" * 50)
+        
+        # Write updated results
+        with open(self.output_file, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        
+        return None
+
+    def _generate_response(self, batch):
+        """Generate response for a batch
+        
+        Args:
+            batch: Batch dict with 'input_ids', 'mmwave_features', 'attention_mask'
+            
+        Returns:
+            List of generated response strings
+        """
+        batch_size = batch['input_ids'].shape[0]
+        responses = []
+        
+        # Get device from model
+        device = next(self.model.parameters()).device
+        
+        # Generate one sample at a time to avoid batch processing issues
+        for i in range(batch_size):
+            # Extract single sample
+            input_ids_single = batch['input_ids'][i:i+1].to(device)
+            attention_mask_single = None
+            if batch.get('attention_mask') is not None:
+                attention_mask_single = batch['attention_mask'][i:i+1].to(device)
+            
+            # Extract single mmwave_features
+            mmwave_features_single = {
+                'range_time': batch['mmwave_features']['range_time'][i:i+1].to(device),
+                'doppler_time': batch['mmwave_features']['doppler_time'][i:i+1].to(device),
+                'azimuth_time': batch['mmwave_features']['azimuth_time'][i:i+1].to(device)
+            }
+            
+            # Process mmwave features through encoder and projection
+            mmwave_embeds_single = self._process_mmwave_features(mmwave_features_single)
+            
+            # Generate using input_ids and mmwave_embeds
+            # The model's forward method will handle the fusion automatically
+            with torch.no_grad():
+                generate_kwargs = {
+                    'input_ids': input_ids_single,
+                    'input_wave_embeds': mmwave_embeds_single,
+                    'attention_mask': attention_mask_single,
+                    'max_new_tokens': self.test_max_new_tokens,
+                    'temperature': self.test_temperature,
+                    'pad_token_id': self.tokenizer.pad_token_id,
+                    'eos_token_id': self.tokenizer.eos_token_id,
+                    'do_sample': True,
+                }
+                
+                # Generate using the model
+                # The model's prepare_inputs_for_generation will handle mmwave_embeds
+                outputs = self.model.generate(**generate_kwargs)
+            
+            # Decode response
+            input_length = input_ids_single.shape[1]
+            response_ids = outputs[0][input_length:]
+            response = self.tokenizer.decode(response_ids, skip_special_tokens=True)
+            responses.append(response.strip())
+        
+        return responses

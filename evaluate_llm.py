@@ -1,177 +1,69 @@
-"""Evaluation script for the new conversation template architecture"""
+"""Evaluation script for fine-tuned Phi3 with mmwave features using PyTorch Lightning"""
 
 import argparse
-import torch
-from transformers import AutoTokenizer
-from pytorch_lightning import LightningModule
-import json
 import os
-from tqdm import tqdm
 from termcolor import colored
+import pytorch_lightning as pl
+from easydict import EasyDict
 
-from src.llm.llm.model_factory import ModelFactory
 from src.llm.utils.config_loader import load_yaml_config
-from src.llm.utils.conversation_utils import ConversationHandler
 from src.llm.datamodule import WaveLLMDataModule
+from src.llm.trainer import WaveLLMTrainer
+from deepspeed.utils.zero_to_fp32 import load_state_dict_from_zero_checkpoint
+
+# Import shared functions from train_llm
+from train_llm import is_rank_0, log_info, override_config
 
 
-class WaveLLMEvaluator:
-    """Evaluator for mmwave+LLM models using conversation templates"""
+def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
+    """Load model from checkpoint (supports both Lightning and DeepSpeed checkpoints)"""
+    log_info(f"Loading model from checkpoint: {checkpoint_path}")
+    
+    # Load configuration
+    cfg = load_yaml_config(config_path)
+    
+    # Override data_root if provided
+    if data_root:
+        cfg.data_cfg.data_root = data_root
+        cfg.model_cfg.encoder_path = data_root
+    
+    # Prepare model config (same as training)
+    model_cfg_dict = dict(cfg.model_cfg)
+    model_cfg_dict['training'] = EasyDict(cfg.training)
+    model_cfg_with_training = EasyDict(model_cfg_dict)
 
-    def __init__(self, model_path, encoder_path, config=None):
-        """
-        Initialize evaluator
-
-        Args:
-            model_path: Path to fine-tuned model checkpoint
-            encoder_path: Path to radar encoder
-            config: Model configuration
-        """
-        self.model_path = model_path
-        self.encoder_path = encoder_path
-        self.config = config or self._load_default_config()
-
-        # Load model and tokenizer
-        self.model = self._load_model()
-        self.tokenizer = self._load_tokenizer()
-
-        # Initialize conversation handler
-        self.conv_handler = ConversationHandler(
-            conv_template=self.config.get('conversation_template', 'conv_phi3'),
-            wave_indicator=self.config.get('wave_indicator', '<wave>')
+    # Check if it's a DeepSpeed checkpoint (directory with checkpoint/ subdirectory)
+    is_deepspeed_checkpoint = os.path.isdir(checkpoint_path) and \
+                              os.path.exists(os.path.join(checkpoint_path, 'checkpoint'))
+    
+    if is_deepspeed_checkpoint:
+        # For DeepSpeed checkpoint, create model first, then load state dict
+        log_info("Detected DeepSpeed checkpoint, using load_state_dict_from_zero_checkpoint")
+        model = WaveLLMTrainer(model_cfg_with_training)
+        # Load state dict from DeepSpeed ZeRO checkpoint
+        model = load_state_dict_from_zero_checkpoint(model, checkpoint_path)
+    else:
+        # For regular Lightning checkpoint, use load_from_checkpoint
+        model = WaveLLMTrainer.load_from_checkpoint(
+            checkpoint_path,
+            cfg=model_cfg_with_training,
+            strict=False  # Allow missing keys (e.g., optimizer state)
         )
-
-    def _load_default_config(self):
-        """Load default configuration"""
-        return {
-            'conversation_template': 'conv_phi3',
-            'mm_use_wave_start_end': True,
-            'wave_token_len': 248,
-            'wave_indicator': '<wave>',
-            'model_path': self.model_path
-        }
-
-    def _load_model(self):
-        """Load the fine-tuned model"""
-        # Load Lightning checkpoint
-        model = LightningModule.load_from_checkpoint(self.model_path)
+    
         model.eval()
-        return model.cuda()
+    # Move entire model to GPU
+    model = model.cuda()
+    # Explicitly move radar_encoder and projection layers to GPU
+    if hasattr(model, 'radar_encoder'):
+        model.radar_encoder = model.radar_encoder.cuda()
+    if hasattr(model, 'mm_projection_layers'):
+        model.mm_projection_layers = model.mm_projection_layers.cuda()
 
-    def _load_tokenizer(self):
-        """Load tokenizer from model configuration"""
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.config['model_path'],
-            model_max_length=self.config.get('model_max_length', 2048),
-            padding_side="right",
-            use_fast=False
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        return tokenizer
-
-    def format_question_with_wave(self, question):
-        """Format question with wave indicator"""
-        return self.conv_handler.format_qa_without_wave(question, "[ANSWER_PLACEHOLDER]")
-
-    def prepare_inputs(self, questions, mmwave_features):
-        """Prepare inputs for generation"""
-        batch_inputs = []
-        batch_mmwave = []
-
-        for question, features in zip(questions, mmwave_features):
-            # Format conversation
-            conversation_text = self.conv_handler.format_qa_with_wave_patch(
-                question, "[ANSWER_PLACEHOLDER]"
-            )
-            conversation_text = self.conv_handler.replace_wave_indicator_with_tokens(conversation_text)
-
-            # Tokenize
-            tokenized = self.tokenizer(
-                conversation_text,
-                return_tensors="pt",
-                padding=False,
-                truncation=True,
-                max_length=self.tokenizer.model_max_length
-            )
-
-            batch_inputs.append({
-                'input_ids': tokenized.input_ids.squeeze(0),
-                'attention_mask': tokenized.attention_mask.squeeze(0),
-                'mmwave_features': features
-            })
-
-        return batch_inputs
-
-    def generate_response(self, question, mmwave_features, max_new_tokens=50,
-                         temperature=0.7, do_sample=True, top_p=0.9):
-        """Generate response for a single question"""
-
-        # Prepare inputs
-        batch_inputs = self.prepare_inputs([question], [mmwave_features])
-        inputs = batch_inputs[0]
-
-        # Generate
-        with torch.no_grad():
-            outputs = self.model.generate(
-                input_ids=inputs['input_ids'].unsqueeze(0).cuda(),
-                mmwave_embeds=inputs['mmwave_features'].unsqueeze(0).cuda(),
-                attention_mask=inputs['attention_mask'].unsqueeze(0).cuda(),
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=do_sample,
-                top_p=top_p,
-                pad_token_id=self.tokenizer.pad_token_id
-            )
-
-        # Decode response
-        input_length = inputs['input_ids'].shape[0]
-        response_ids = outputs[0][input_length:]
-        response = self.tokenizer.decode(response_ids, skip_special_tokens=True)
-
-        return response.strip()
-
-    def evaluate_dataset(self, dataset, output_file, batch_size=4):
-        """Evaluate on entire dataset"""
-        results = {}
-
-        print(f"Evaluating {len(dataset)} samples...")
-
-        for i in tqdm(range(0, len(dataset), batch_size)):
-            batch = dataset[i:i+batch_size]
-
-            questions = [item['question'] for item in batch]
-            answers = [item['answer'] for item in batch]
-            mmwave_features = [item['wave_embed'] for item in batch]
-
-            # Generate responses for batch
-            responses = []
-            for j, (question, features) in enumerate(zip(questions, mmwave_features)):
-                response = self.generate_response(question, features)
-                responses.append(response)
-
-                # Print sample
-                if i + j < 5:  # Print first 5 samples
-                    print(colored(f"\nSample {i+j}:", "cyan"))
-                    print(colored("Question:", "blue"), question)
-                    print(colored("Response:", "green"), response)
-                    print(colored("Ground Truth:", "yellow"), answers[j])
-                    print("-" * 50)
-
-            # Save results
-            for j, (question, answer, response) in enumerate(zip(questions, answers, responses)):
-                results[f"sample_{i+j}"] = {
-                    "question": question,
-                    "answer": answer,
-                    "prediction": response
-                }
-
-        # Save results
-        with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2)
-
-        print(f"Results saved to {output_file}")
-        return results
+    # Set tokenizer padding_side to 'left' for decoder-only generation
+    model.tokenizer.padding_side = 'left'
+    
+    log_info("Model loaded successfully")
+    return model, cfg
 
 
 def main():
@@ -181,60 +73,94 @@ def main():
     # Required arguments
     parser.add_argument("--model_checkpoint", type=str, required=True,
                         help="Path to model checkpoint (.ckpt file)")
-    parser.add_argument("--data_root", type=str, required=True,
-                        help="Path to data directory")
-    parser.add_argument("--output_file", type=str, required=True,
-                        help="Output file for results")
+    parser.add_argument("--config", type=str, required=True,
+                        help="Path to YAML configuration file (same as training)")
+    parser.add_argument("--data_root", type=str, default=None,
+                        help="Path to data directory (overrides config file)")
 
     # Optional arguments
-    parser.add_argument("--split", type=str, default="test_QAs",
-                        help="Dataset split to evaluate")
-    parser.add_argument("--batch_size", type=int, default=4,
-                        help="Batch size for evaluation")
-    parser.add_argument("--max_new_tokens", type=int, default=50,
-                        help="Maximum new tokens to generate")
-    parser.add_argument("--temperature", type=float, default=0.7,
-                        help="Generation temperature")
-    parser.add_argument("--num_samples", type=int, default=None,
-                        help="Number of samples to evaluate (None for all)")
+    parser.add_argument("--split", type=str, default=None,
+                        help="Dataset split to evaluate (overrides config file)")
+    parser.add_argument("--batch_size", type=int, default=None,
+                        help="Batch size for evaluation (overrides config file)")
+    parser.add_argument("--max_new_tokens", type=int, default=None,
+                        help="Maximum new tokens to generate (overrides config)")
+    parser.add_argument("--temperature", type=float, default=None,
+                        help="Generation temperature (overrides config)")
 
     args = parser.parse_args()
 
-    # Check if model checkpoint exists
-    if not os.path.exists(args.model_checkpoint):
+    # Check and resolve checkpoint path
+    checkpoint_path = args.model_checkpoint
+    if not os.path.exists(checkpoint_path):
         print(colored("[ERROR]", "red") + f" Model checkpoint not found: {args.model_checkpoint}")
         return
 
-    # Initialize evaluator
-    print(f"Loading model from {args.model_checkpoint}")
-    evaluator = WaveLLMEvaluator(
-        model_path=args.model_checkpoint,
-        encoder_path=args.data_root  # Assuming encoder is in data_root
+    # PyTorch Lightning supports both file and directory checkpoints
+    # - File: regular .ckpt file
+    # - Directory: DeepSpeed checkpoint (contains checkpoint/ subdirectory)
+    if os.path.isdir(checkpoint_path):
+        # Check if it's a DeepSpeed checkpoint directory
+        checkpoint_subdir = os.path.join(checkpoint_path, 'checkpoint')
+        if os.path.exists(checkpoint_subdir):
+            log_info(f"Detected DeepSpeed checkpoint directory: {checkpoint_path}")
+        else:
+            # If it's a directory but not DeepSpeed format, look for .ckpt file inside
+            ckpt_files = [f for f in os.listdir(checkpoint_path) if f.endswith('.ckpt')]
+            if ckpt_files:
+                checkpoint_path = os.path.join(checkpoint_path, ckpt_files[0])
+                log_info(f"Found checkpoint file in directory: {checkpoint_path}")
+            else:
+                print(colored("[ERROR]", "red") + f" Invalid checkpoint directory: {args.model_checkpoint}")
+                print(colored("[INFO]", "yellow") + " Expected either a .ckpt file or a DeepSpeed checkpoint directory")
+                return
+    else:
+        log_info(f"Using checkpoint file: {checkpoint_path}")
+
+    # Check if config file exists
+    if not os.path.exists(args.config):
+        print(colored("[ERROR]", "red") + f" Config file not found: {args.config}")
+        return
+
+    # Load model from checkpoint
+    model, cfg = load_model_from_checkpoint(checkpoint_path, args.config, args.data_root)
+
+    # Override config with command line arguments
+    if args.split is not None:
+        cfg.data_cfg.test_split = args.split
+    if args.batch_size is not None:
+        override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
+    
+    # Set default batch_size if not in config
+    if not hasattr(cfg.data_cfg, 'batch_size') or cfg.data_cfg.batch_size is None:
+        cfg.data_cfg.batch_size = 4  # Default batch size for evaluation
+        log_info(f"Using default batch_size: {cfg.data_cfg.batch_size}")
+
+    # Override test generation parameters
+    if args.max_new_tokens is not None:
+        cfg.test_max_new_tokens = args.max_new_tokens
+    if args.temperature is not None:
+        cfg.test_temperature = args.temperature
+
+    # Load dataset using DataModule (same as training)
+    log_info(f"Loading dataset from {cfg.data_cfg.data_root}")
+    data_module = WaveLLMDataModule(cfg.data_cfg)
+    data_module.setup(stage='test')
+
+    # Create trainer for testing
+    trainer = pl.Trainer(
+        accelerator='gpu',
+        devices=1,
+        precision='bf16-mixed',
+        enable_progress_bar=True,
+        default_root_dir=os.path.dirname(checkpoint_path) if os.path.isfile(checkpoint_path) else checkpoint_path
     )
 
-    # Load dataset
-    print(f"Loading dataset from {args.data_root}")
-    from src.llm.dataset import WaveCaptionDataset
-    dataset = WaveCaptionDataset(
-        data_root=args.data_root,
-        split=args.split,
-        tokenizer=evaluator.tokenizer
-    )
-
-    # Limit dataset size if specified
-    if args.num_samples is not None:
-        dataset = dataset[:args.num_samples]
-        print(f"Limited to {len(dataset)} samples")
-
-    # Evaluate
-    print("Starting evaluation...")
-    results = evaluator.evaluate_dataset(
-        dataset=dataset,
-        output_file=args.output_file,
-        batch_size=args.batch_size
-    )
-
-    print(f"Evaluation completed! Results saved to {args.output_file}")
+    # Run test
+    log_info("Starting evaluation...")
+    trainer.test(model, datamodule=data_module)
+    
+    log_info("Evaluation completed! Results saved to evaluation directory")
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ class WaveBaseModel(PreTrainedModel):
     def process_wave_features(
         self,
         inputs_embeds: torch.FloatTensor,
-        mmwave_embeds: torch.Tensor,
+        input_wave_embeds: torch.Tensor,
         input_ids: torch.LongTensor,
         attention_mask: torch.LongTensor,
     ) -> tuple[torch.FloatTensor, torch.LongTensor]:
@@ -19,7 +19,7 @@ class WaveBaseModel(PreTrainedModel):
 
         Args:
             inputs_embeds: Text embeddings [B, L, H]
-            mmwave_embeds: Mmwave features [B, T, H] (already projected)
+            input_wave_embeds: Mmwave features [B, T, H] (already projected)
             input_ids: Input token ids [B, L]
             attention_mask: Original attention mask [B, L]
         Returns:
@@ -29,6 +29,9 @@ class WaveBaseModel(PreTrainedModel):
         wave_patch_token_id = getattr(self.config, 'wave_patch_token', None)
         wave_token_len = getattr(self.config, 'wave_token_len', 248)
 
+        # Get device from input tensors
+        device = inputs_embeds.device
+        
         # Process each sample in the batch
         new_embeds = []
         new_masks = []
@@ -43,8 +46,8 @@ class WaveBaseModel(PreTrainedModel):
 
                 if current_token_id == wave_patch_token_id:
                     # Replace this wave_patch_token with mmwave embeddings
-                    if wave_idx < mmwave_embeds.shape[1]:
-                        sample_embeds.append(mmwave_embeds[batch_idx, wave_idx])
+                    if wave_idx < input_wave_embeds.shape[1]:
+                        sample_embeds.append(input_wave_embeds[batch_idx, wave_idx])
                         sample_mask.append(1)
                         wave_idx += 1
                 else:
@@ -53,6 +56,6 @@ class WaveBaseModel(PreTrainedModel):
                     sample_mask.append(attention_mask[batch_idx, seq_idx].item())
 
             new_embeds.append(torch.stack(sample_embeds))
-            new_masks.append(torch.tensor(sample_mask, dtype=torch.long))
+            new_masks.append(torch.tensor(sample_mask, dtype=torch.long, device=device))
 
         return torch.stack(new_embeds), torch.stack(new_masks)

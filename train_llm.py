@@ -74,8 +74,6 @@ def parse_args():
                         help='Gradient accumulation steps (overrides config file)')
 
     # Basic training args
-    parser.add_argument('--test', action='store_true',
-                        help='Run in test mode (no training)')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
     parser.add_argument('--debug', action='store_true',
@@ -185,15 +183,10 @@ def main():
         default_root_dir=cfg.log_dir
     )
 
-    # Train or test
-    if not args.test:
-        log_info("Starting training...")
-        trainer.fit(model, datamodule=data_module)
-        log_info("Training completed successfully")
-    else:
-        log_info("Running test...")
-        trainer.test(model, datamodule=data_module)
-        log_info("Testing completed successfully")
+    # Train
+    log_info("Starting training...")
+    trainer.fit(model, datamodule=data_module)
+    log_info("Training completed successfully")
 
 
 if __name__ == "__main__":
