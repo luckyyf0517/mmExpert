@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 from transformers import get_cosine_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, TaskType
 
-from ..llm.model_factory import ModelFactory
+from .llm.model_factory import ModelFactory
 
 
 class WaveLLMTrainer(pl.LightningModule):
@@ -41,7 +41,7 @@ class WaveLLMTrainer(pl.LightningModule):
     def _setup_wave_tokens_and_conversation(self, cfg):
         """Setup wave tokens and conversation template in model and tokenizer"""
         # Set conversation template globally
-        from src.utils import conversation as conversation_lib
+        from src.llm.utils import conversation as conversation_lib
         conversation_template = cfg.get('conversation_template', 'conv_phi3')
         conversation_lib.default_conversation = conversation_lib.conv_templates[conversation_template].copy()
 
@@ -106,7 +106,7 @@ class WaveLLMTrainer(pl.LightningModule):
         embed_dim = encoder_config['radar_encoder_cfg']['embed_dim']
 
         # Create encoder instance
-        from src.encoders import get_encoder
+        from src.clip.encoders import get_encoder
         encoder = get_encoder(encoder_type)(encoder_config['radar_encoder_cfg'])
 
         # Load weights

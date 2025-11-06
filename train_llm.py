@@ -6,10 +6,10 @@ import pytorch_lightning as pl
 from pytorch_lightning.strategies import DeepSpeedStrategy
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 
-from src.utils.config_loader import load_yaml_config
-from src.utils.deepspeed_utils import add_deepspeed_args, get_train_ds_config
-from src.trainer.wavellm_datamodule import WaveLLMDataModule
-from src.trainer.wavellm_trainer import WaveLLMTrainer
+from src.llm.utils.config_loader import load_yaml_config
+from src.llm.utils.deepspeed_utils import add_deepspeed_args, get_train_ds_config
+from src.llm.datamodule import WaveLLMDataModule
+from src.llm.trainer import WaveLLMTrainer
 
 
 def parse_args():

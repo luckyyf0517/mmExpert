@@ -9,10 +9,10 @@ import os
 from tqdm import tqdm
 from termcolor import colored
 
-from src.llm.model_factory import ModelFactory
-from src.utils.config_loader import load_yaml_config
-from src.utils.conversation_utils import ConversationHandler
-from src.trainer.wavellm_datamodule import WaveLLMDataModule
+from src.llm.llm.model_factory import ModelFactory
+from src.llm.utils.config_loader import load_yaml_config
+from src.llm.utils.conversation_utils import ConversationHandler
+from src.llm.datamodule import WaveLLMDataModule
 
 
 class WaveLLMEvaluator:
@@ -214,7 +214,7 @@ def main():
 
     # Load dataset
     print(f"📂 Loading dataset from {args.data_root}")
-    from src.datasets.wavellm_dataset import WaveCaptionDataset
+    from src.llm.dataset import WaveCaptionDataset
     dataset = WaveCaptionDataset(
         data_root=args.data_root,
         split=args.split,

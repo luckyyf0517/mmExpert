@@ -25,9 +25,9 @@ from termcolor import colored
 # Add project root to path
 sys.path.append('/root/autodl-tmp/mmExpert')
 
-from src.model.clip import CLIP
-from src.data_interface import HumanDInterface
-from src.misc.io import load_config
+from src.clip import CLIP
+from src.clip.datamodule import HumanDInterface
+from src.clip.utils.io import load_config
 from easydict import EasyDict as edict
 import pytorch_lightning as pl
 
@@ -333,7 +333,7 @@ class CLIPEvaluator:
                 )
 
                 # Extract features from encoding results
-                from src.core.base import ModalityType
+                from src.clip.core.base import ModalityType
                 radar_features = encoding_results[ModalityType.RADAR].features
                 text_features = encoding_results[ModalityType.TEXT].features
 

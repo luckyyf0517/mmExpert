@@ -25,7 +25,7 @@ import torch
 from tabulate import tabulate
 
 # Import TextEncoder
-from src.encoders.text_encoder import TextEncoder
+from src.clip.encoders.text_encoder import TextEncoder
 
 
 # Common text encoder models

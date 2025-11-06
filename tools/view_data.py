@@ -15,8 +15,8 @@ from termcolor import colored
 # Add project root to path
 sys.path.append('.')
 
-from src.misc.io import load_config
-from src.misc.tools import instantiate_from_config
+from src.clip.utils.io import load_config
+from src.clip.utils.tools import instantiate_from_config
 
 
 def ensure_preview_directory():

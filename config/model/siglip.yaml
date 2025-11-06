@@ -1,5 +1,5 @@
 # SigLIP model configuration - identical to CLIP except for loss function
-target: src.model.clip.CLIP
+target: src.clip.clip.clip_model.CLIPModel
 params:
   max_epochs: 50
   learning_rate: 1.0e-04

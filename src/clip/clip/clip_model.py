@@ -20,8 +20,8 @@ from ..core.registry import register_model
 from ..core.factory import auto_factory, create_encoder
 from ..core.injection import injectable, ServiceLifetime
 from ..encoders.text_encoder import TextEncoder
-from ..model.clip_loss import ClipLoss, SigLipLoss, create_loss
-from ..model.sequence_similarity import SequenceSimilarity
+from .clip_loss import ClipLoss, SigLipLoss, create_loss
+from .sequence_similarity import SequenceSimilarity
 
 
 @register_model(

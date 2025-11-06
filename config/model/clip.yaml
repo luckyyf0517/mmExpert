@@ -1,7 +1,7 @@
 # CLIP v1 model configuration for radar data
 # Optimized configuration based on extensive experimental evaluation
 # Best performing configuration: Learning rate 1e-4 experiment (avg recall@1: 0.466)
-target: src.model.clip.CLIP
+target: src.clip.clip.clip_model.CLIPModel
 params:
   # Training parameters
   max_epochs: 50

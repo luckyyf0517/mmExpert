@@ -15,8 +15,8 @@ import yaml
 import os.path as osp
 
 import sys; sys.path.append('.')
-from src.utils import conversation as conversation_lib
-from src.datasets.base_dataset import load_radar_data
+from src.llm.utils import conversation as conversation_lib
+from src.clip.dataset import load_radar_data
 
 # Constants
 IGNORE_INDEX = -100
@@ -431,8 +431,8 @@ if __name__ == "__main__":
     import os
     
     # Import conversation modules
-    from src.utils import conversation as conversation_lib
-    from src.utils.conversation import conv_templates
+    from src.llm.utils import conversation as conversation_lib
+    from src.llm.utils.conversation import conv_templates
     
     # Set test parameters
     data_root = "feature/clip_v1.11_bs64_r8a16"

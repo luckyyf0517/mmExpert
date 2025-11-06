@@ -9,9 +9,9 @@ from easydict import EasyDict as edict
 # Add project root to path
 sys.path.append('/root/autodl-tmp/mmExpert')
 
-from src.misc.io import load_config
-from src.misc.tools import instantiate_from_config
-from src.model.clip import CLIP
+from src.clip.utils.io import load_config
+from src.clip.utils.tools import instantiate_from_config
+from src.clip import CLIP
 
 
 def discover_config_from_checkpoint(checkpoint_path):

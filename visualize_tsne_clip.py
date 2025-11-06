@@ -22,10 +22,10 @@ import glob
 # Add project root to path
 sys.path.append('/root/autodl-tmp/mmExpert')
 
-from src.model.clip import CLIP
-from src.data_interface import HumanDInterface
-from src.misc.io import load_config
-from src.core.base import ModalityType
+from src.clip import CLIP
+from src.clip.datamodule import HumanDInterface
+from src.clip.utils.io import load_config
+from src.clip.core.base import ModalityType
 
 
 class CLIPTSNEVisualizer:

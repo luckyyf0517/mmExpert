@@ -15,7 +15,7 @@ DEFAULT_WAVE_TOKEN_LEN = 248
 IGNORE_INDEX = -100
 
 # Import conversation utilities
-from src.utils import conversation as conversation_lib
+from src.llm.utils import conversation as conversation_lib
 
 
 def preprocess_multimodal_wave(
@@ -189,7 +189,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
     def _load_dataset(self, split):
         """Load dataset using existing wavellm_dataset logic but with new conversation handling"""
         # Import existing dataset class
-        from src.datasets.wavellm_dataset import WaveCaptionDataset, DEFAULT_QUESTION_PROMPTS
+        from .dataset import WaveCaptionDataset, DEFAULT_QUESTION_PROMPTS
         import random
 
         # Create original dataset to get raw data

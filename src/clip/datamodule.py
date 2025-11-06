@@ -21,7 +21,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader, ConcatDataset, Sampler
 
-from src.datasets.base_dataset import Text2DopplerDatasetV2
+from src.clip.dataset import Text2DopplerDatasetV2
 
 
 class DInterface(pl.LightningDataModule):

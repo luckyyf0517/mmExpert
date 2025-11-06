@@ -39,9 +39,9 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from swanlab.integration.pytorch_lightning import SwanLabLogger
 import swanlab
 
-from src.misc.io import load_config
-from src.misc.tools import instantiate_from_config
-from src.misc.config_printer import print_core_config
+from src.clip.utils.io import load_config
+from src.clip.utils.tools import instantiate_from_config
+from src.clip.utils.config_printer import print_core_config
 
 
 def set_seed(seed, n_gpu):

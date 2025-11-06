@@ -1,5 +1,5 @@
 # Data configuration for HumanML3D dataset with radar data
-target: src.data_interface.HumanDInterface
+target: src.clip.datamodule.HumanDInterface
 params:
   cfg:
     # Dataset splits
