@@ -20,6 +20,10 @@ def parse_args():
     parser.add_argument('--config', type=str, required=True,
                         help='Path to YAML configuration file')
 
+    # Data root path (overrides config file)
+    parser.add_argument('--data_root', type=str, default=None,
+                        help='Path to feature directory (overrides config file)')
+
     # Basic training args
     parser.add_argument('--test', action='store_true',
                         help='Run in test mode (no training)')
@@ -37,6 +41,20 @@ def main():
 
     # Load configuration from YAML
     cfg = load_yaml_config(args.config)
+
+    # Override data_root if provided via command line
+    if args.data_root is not None:
+        # Update both data_cfg.data_root and model_cfg.encoder_path
+        cfg.data_cfg.data_root = args.data_root
+        cfg.model_cfg.encoder_path = args.data_root
+        print(f"Using data_root from command line: {args.data_root}")
+    else:
+        # Check if data_root is set in config file
+        if not cfg.data_cfg.data_root or cfg.data_cfg.data_root == "":
+            raise ValueError("data_root must be provided either via --data_root argument or in config file")
+        # Update encoder_path to match data_root if not already set
+        if not cfg.model_cfg.encoder_path or cfg.model_cfg.encoder_path == "":
+            cfg.model_cfg.encoder_path = cfg.data_cfg.data_root
 
     # Set seeds
     pl.seed_everything(args.seed)

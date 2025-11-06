@@ -4,12 +4,12 @@
 # Model configuration
 model_cfg:
   model_type: phi3
-  encoder_path: "feature/20251105_090705_clip"  # Path to radar encoder
+  encoder_path: ""  # Will be set via --data_root argument in training script
   use_peft: true
 
   # Model parameters
   model:
-    model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/9a18a31c28aee2216a7a9aa280d4333ac51d40c9"
+    model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/0a67737cc96d2554230f90338b163bc6380a2a85"
     model_max_length: 2048
 
   # LoRA configuration
@@ -26,8 +26,8 @@ model_cfg:
 
 # Data configuration
 data_cfg:
-  data_root: "feature/20251105_090705_clip"  # Same as encoder_path
-  model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/9a18a31c28aee2216a7a9aa280d4333ac51d40c9"
+  data_root: ""  # Will be set via --data_root argument in training script
+  model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/0a67737cc96d2554230f90338b163bc6380a2a85"
   model_max_length: 2048
   batch_size: 8
   num_workers: 4

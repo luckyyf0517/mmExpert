@@ -95,19 +95,28 @@ class WaveLLMTrainer(pl.LightningModule):
     def _load_radar_encoder(self, encoder_path):
         """Load pre-trained radar encoder and projection layers"""
         import yaml
+        from easydict import EasyDict
 
-        # Load encoder config
+        # Load encoder config (now always plain dict format)
         config_path = os.path.join(encoder_path, 'radar_encoder_config.yaml')
         with open(config_path, 'r') as f:
             encoder_config = yaml.safe_load(f)
 
+        # Get encoder config - convert plain dict to EasyDict for encoder compatibility
+        radar_cfg = EasyDict(encoder_config['radar_encoder_cfg'])
+        
         # Get encoder type and dimensions
-        encoder_type = encoder_config['radar_encoder_cfg']['type']
-        embed_dim = encoder_config['radar_encoder_cfg']['embed_dim']
+        encoder_type = radar_cfg.get('encoder_type') or radar_cfg.get('type')
+        # Use embed_dim from radar_cfg first, fallback to top-level config
+        embed_dim = radar_cfg.get('embed_dim')
+        if embed_dim is None:
+            embed_dim = encoder_config.get('embed_dim', 768)
+        # Ensure embed_dim is an integer
+        embed_dim = int(embed_dim)
 
         # Create encoder instance
         from src.clip.encoders import get_encoder
-        encoder = get_encoder(encoder_type)(encoder_config['radar_encoder_cfg'])
+        encoder = get_encoder(encoder_type)(radar_cfg)
 
         # Load weights
         weights_path = os.path.join(encoder_path, 'radar_encoder.pth')

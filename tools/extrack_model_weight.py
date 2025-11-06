@@ -133,8 +133,24 @@ def extract_weights(config_file=None, checkpoint_path=None):
     
     # Save radar encoder configuration (YAML only)
     radar_config = model_cfg['encoder_configs']['radar']
+    
+    # Convert EasyDict to regular dict recursively to avoid YAML special tags
+    def easydict_to_dict(obj):
+        """Recursively convert EasyDict to regular dict"""
+        if isinstance(obj, edict):
+            return {k: easydict_to_dict(v) for k, v in obj.items()}
+        elif isinstance(obj, dict):
+            return {k: easydict_to_dict(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [easydict_to_dict(item) for item in obj]
+        else:
+            return obj
+    
+    # Convert radar_config to regular dict
+    radar_config_dict = easydict_to_dict(radar_config)
+    
     config_output = {
-        'radar_encoder_cfg': radar_config,
+        'radar_encoder_cfg': radar_config_dict,
         'embed_dim': model_cfg.get('embed_dim', 512),
         'version': version_name,
         'checkpoint_path': checkpoint_path,

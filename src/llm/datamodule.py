@@ -1,5 +1,6 @@
 """DataModule for mmwave feature + Q&A training with conversation templates"""
 
+import os
 import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
@@ -154,12 +155,29 @@ class WaveLLMDataModule(pl.LightningDataModule):
 
     def _load_tokenizer(self):
         """Load tokenizer from model path"""
+        # Convert to absolute path
+        model_path = os.path.abspath(self.model_path)
+        
+        # Check if path exists and is a directory
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+        
+        if not os.path.isdir(model_path):
+            raise ValueError(f"Model path is not a directory: {model_path}")
+        
+        # Load tokenizer from local files only (no fallback to hub)
+        load_kwargs = {
+            'model_max_length': self.model_max_length,
+            'padding_side': "right",
+            'use_fast': False,
+            'local_files_only': True
+        }
+        
         tokenizer = AutoTokenizer.from_pretrained(
-            self.model_path,
-            model_max_length=self.model_max_length,
-            padding_side="right",
-            use_fast=False
+            model_path,
+            **load_kwargs
         )
+        
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         return tokenizer

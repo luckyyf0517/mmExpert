@@ -4,7 +4,10 @@
 # Usage: bash scripts/train_llm.sh
 
 # Set the path to your configuration file
-CONFIG_FILE="config/llm/train_llm.yaml"
+CONFIG_FILE="config/llm/phi3.yaml"
+
+# Data root path (feature directory)
+DATA_ROOT="feature/20251105_090705_clip"
 
 # Basic training parameters
 BATCH_SIZE=8
@@ -18,6 +21,7 @@ OFFLOAD=0
 # Build the command
 CMD="python train_llm.py \
     --config ${CONFIG_FILE} \
+    --data_root ${DATA_ROOT} \
     --batch_size ${BATCH_SIZE} \
     --world_size ${WORLD_SIZE} \
     --zero_stage ${ZERO_STAGE} \
