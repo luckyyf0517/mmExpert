@@ -12,7 +12,8 @@ from src.llm.datamodule import WaveLLMDataModule
 from src.llm.trainer import WaveLLMTrainer
 
 # Import shared utility functions
-from src.llm.utils.common_utils import is_rank_0, log_info, override_config, load_model_from_checkpoint
+from src.llm.utils.common_utils import override_config, load_model_from_checkpoint
+from src.logger import log_message
 
 
 def main():
@@ -62,10 +63,10 @@ def main():
     # Set default batch_size if not in config
     if not hasattr(cfg.data_cfg, 'batch_size') or cfg.data_cfg.batch_size is None:
         cfg.data_cfg.batch_size = 4  # Default batch size for evaluation
-        log_info(f"Using default batch_size: {cfg.data_cfg.batch_size}")
+        log_message("CONFIG", f"Using default batch_size: {cfg.data_cfg.batch_size}", color="blue")
 
     # Load dataset using DataModule (same as training)
-    log_info(f"Loading dataset from {cfg.data_cfg.data_root}")
+    log_message("LOAD", f"Loading dataset from {cfg.data_cfg.data_root}", color="cyan")
     data_module = WaveLLMDataModule(cfg.data_cfg)
     data_module.setup(stage='test')
 
@@ -79,10 +80,10 @@ def main():
     )
 
     # Run test
-    log_info("Starting evaluation...")
+    log_message("PROGRESS", "Starting evaluation...", color="yellow")
     trainer.test(model, datamodule=data_module)
     
-    log_info("Evaluation completed! Results saved to evaluation directory")
+    log_message("SUCCESS", "Evaluation completed! Results saved to evaluation directory", color="green")
 
 
 if __name__ == "__main__":

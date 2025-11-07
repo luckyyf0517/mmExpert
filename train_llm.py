@@ -20,7 +20,8 @@ warnings.filterwarnings('ignore', message='.*Precision bf16-mixed is not support
 from easydict import EasyDict
 from src.llm.utils.config_loader import load_yaml_config
 from src.llm.utils.deepspeed_utils import add_deepspeed_args, get_train_ds_config
-from src.llm.utils.common_utils import is_rank_0, log_info, override_config, save_training_artifacts
+from src.llm.utils.common_utils import override_config, save_training_artifacts
+from src.logger import log_message
 from src.llm.datamodule import WaveLLMDataModule
 from src.llm.trainer import WaveLLMTrainer
 
@@ -75,7 +76,7 @@ def main():
     if args.data_root is not None:
         cfg.data_cfg.data_root = args.data_root
         cfg.model_cfg.encoder_path = args.data_root
-        log_info(f"Using data_root from command line: {args.data_root}")
+        log_message("CONFIG", f"Using data_root from command line: {args.data_root}", color="blue")
     else:
         if not cfg.data_cfg.data_root:
             raise ValueError("data_root must be provided either via --data_root argument or in config file")
@@ -96,7 +97,7 @@ def main():
     log_dir_parent = os.path.dirname(cfg.log_dir)
     log_dir_name = os.path.basename(cfg.log_dir)
     cfg.log_dir = os.path.join(log_dir_parent, f"{timestamp}_{log_dir_name}")
-    log_info(f"Using log directory: {cfg.log_dir}")
+    log_message("CONFIG", f"Using log directory: {cfg.log_dir}", color="blue")
     
     # Extract experiment name from log_dir (the directory name with timestamp)
     experiment_name = os.path.basename(cfg.log_dir)
@@ -152,20 +153,19 @@ def main():
     # Use max_steps if provided, otherwise use max_epochs
     if args.max_steps is not None:
         trainer_kwargs['max_steps'] = args.max_steps
-        log_info(f"Using max_steps: {args.max_steps}")
+        log_message("CONFIG", f"Using max_steps: {args.max_steps}", color="blue")
     else:
         trainer_kwargs['max_epochs'] = cfg.training.max_epochs
     
     trainer = pl.Trainer(**trainer_kwargs)
 
     # Train
-    log_info("Starting training...")
+    log_message("PROGRESS", "Starting training...", color="yellow")
     trainer.fit(model, datamodule=data_module)
-    log_info("Training completed successfully")
+    log_message("SUCCESS", "Training completed successfully", color="green")
     
     # Save training artifacts (only on rank 0)
-    if is_rank_0():
-        save_training_artifacts(model, cfg.log_dir)
+    save_training_artifacts(model, cfg.log_dir)
 
 
 if __name__ == "__main__":

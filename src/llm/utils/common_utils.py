@@ -3,37 +3,19 @@
 import os
 import json
 import warnings
-from termcolor import colored
 from easydict import EasyDict
+from src.logger import log_message
 
 
-def is_rank_0():
-    """Check if current process is rank 0"""
-    try:
-        import torch.distributed as dist
-        if dist.is_initialized():
-            return dist.get_rank() == 0
-    except Exception:
-        pass
-    # Fallback to environment variable
-    rank = os.environ.get('RANK', None)
-    if rank is not None:
-        return int(rank) == 0
-    # Default to True if not in distributed mode
-    return True
 
 
-def log_info(message):
-    """Print info message only on rank 0"""
-    if is_rank_0():
-        print(colored("[INFO]", "green") + f" {message}")
 
 
 def override_config(cfg_obj, attr_name, arg_value, arg_name):
     """Override config attribute with command line argument if provided"""
     if arg_value is not None:
         setattr(cfg_obj, attr_name, arg_value)
-        log_info(f"Using {arg_name} from command line: {arg_value}")
+        log_message("CONFIG", f"Using {arg_name} from command line: {arg_value}", color="blue")
 
 
 def load_non_lora_trainables(model, checkpoint_path, require_grad_metadata=True):
@@ -53,7 +35,7 @@ def load_non_lora_trainables(model, checkpoint_path, require_grad_metadata=True)
     if not os.path.exists(non_lora_path):
         raise FileNotFoundError(f"Non-LoRA parameters file not found: {non_lora_path}")
 
-    log_info(f"Loading non-LoRA trainable parameters from {non_lora_path}")
+    log_message("LOAD", f"Loading non-LoRA trainable parameters from {non_lora_path}", color="cyan")
     non_lora_state = load_file(non_lora_path)
 
     # Enumerate trainable parameters (when available) to derive expected keys.
@@ -89,10 +71,10 @@ def load_non_lora_trainables(model, checkpoint_path, require_grad_metadata=True)
     # All expected parameters must be present, no extra parameters allowed
     try:
         model.model.load_state_dict(merged_state, strict=True)
-        log_info(f"Non-LoRA trainable parameters loaded successfully: {len(non_lora_state)} parameters")
+        log_message("SUCCESS", f"Non-LoRA trainable parameters loaded successfully: {len(non_lora_state)} parameters", color="green")
         for key in sorted(actual_keys):
             shape = tuple(non_lora_state[key].shape)
-            log_info(f"  Loaded: {key} (shape: {shape})")
+            log_message("LOAD", f"  Loaded: {key} (shape: {shape})", color="cyan")
 
     except RuntimeError as e:
         raise RuntimeError(f"Failed to load non-LoRA parameters: {e}") from e
@@ -111,14 +93,14 @@ def save_training_artifacts(model, output_dir):
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
-    log_info(f"Saving training artifacts to {output_dir}")
+    log_message("INFO", f"Saving training artifacts to {output_dir}", color="green")
 
     # Save LoRA adapter weights (PEFT standard)
     lora_state_dict = get_peft_model_state_dict(model.model)
     lora_state_dict = {k: v.contiguous() for k, v in lora_state_dict.items()}
 
     save_file(lora_state_dict, os.path.join(output_dir, "adapter_model.safetensors"))
-    log_info(f"LoRA adapter saved: {len(lora_state_dict)} parameters")
+    log_message("SUCCESS", f"LoRA adapter saved: {len(lora_state_dict)} parameters", color="green")
 
     # Save LoRA config
     adapter_config = model.model.peft_config['default'].to_dict()
@@ -136,7 +118,7 @@ def save_training_artifacts(model, output_dir):
     adapter_config = make_json_serializable(adapter_config)
     with open(os.path.join(output_dir, "adapter_config.json"), 'w') as f:
         json.dump(adapter_config, f, indent=2)
-    log_info(f"LoRA config saved (adapter_config.json)")
+    log_message("CONFIG", f"LoRA config saved (adapter_config.json)", color="blue")
 
     # Save non-LoRA trainable parameters (matching reference code exactly)
     # This includes mm_projection_layers and other trainable parameters
@@ -148,19 +130,19 @@ def save_training_artifacts(model, output_dir):
     for name, param in model.model.named_parameters():
         if "lora_" not in name and param.requires_grad:
             non_lora_state_dict[name] = model_state_dict[name].contiguous()
-            log_info(f"  Including non-LoRA trainable param: {name} (shape: {param.shape})")
+            log_message("INFO", f"  Including non-LoRA trainable param: {name} (shape: {param.shape})", color="green")
 
     # Save non-LoRA parameters
     save_file(non_lora_state_dict, os.path.join(output_dir, "non_lora_trainables.safetensors"))
-    log_info(f"Non-LoRA trainable parameters saved: {len(non_lora_state_dict)} parameters")
+    log_message("SUCCESS", f"Non-LoRA trainable parameters saved: {len(non_lora_state_dict)} parameters", color="green")
 
     # Calculate sizes
     lora_size = sum(p.numel() * p.element_size() for p in lora_state_dict.values()) / 1024 / 1024
     non_lora_size = sum(p.numel() * p.element_size() for p in non_lora_state_dict.values()) / 1024 / 1024
 
-    log_info(f"LoRA adapter size: {lora_size:.2f} MB")
-    log_info(f"Non-LoRA trainable size: {non_lora_size:.2f} MB")
-    log_info(f"Training artifacts saved successfully! Total: {lora_size + non_lora_size:.2f} MB")
+    log_message("INFO", f"LoRA adapter size: {lora_size:.2f} MB", color="green")
+    log_message("INFO", f"Non-LoRA trainable size: {non_lora_size:.2f} MB", color="green")
+    log_message("SUCCESS", f"Training artifacts saved successfully! Total: {lora_size + non_lora_size:.2f} MB", color="green")
 
 
 def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
@@ -169,7 +151,7 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
     from src.llm.datamodule import WaveLLMDataModule
     from src.llm.trainer import WaveLLMTrainer
 
-    log_info(f"Loading model from LoRA adapter: {checkpoint_path}")
+    log_message("LOAD", f"Loading model from LoRA adapter: {checkpoint_path}", color="cyan")
 
     # Load configuration
     cfg = load_yaml_config(config_path)
@@ -195,7 +177,7 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
                         f"Expected LoRA adapter directory with adapter_model.safetensors and adapter_config.json")
 
     # Load from LoRA adapter
-    log_info("Detected LoRA adapter directory")
+    log_message("INFO", "Detected LoRA adapter directory", color="green")
 
     # Temporarily disable LoRA in config to create base model without PEFT wrapping
     original_use_peft = model_cfg_with_training.use_peft
@@ -210,7 +192,7 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
     # Load LoRA adapter onto base model
     from peft import PeftModel
 
-    log_info(f"Loading LoRA adapter from {checkpoint_path}")
+    log_message("LOAD", f"Loading LoRA adapter from {checkpoint_path}", color="cyan")
 
     # Suppress PEFT warning about missing adapter keys (these are expected when filtering embeddings)
     with warnings.catch_warnings():
@@ -238,17 +220,17 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
     # IMPORTANT: Initialize tokenizer and wave backbone config (like reference code)
     base_model = model.model.get_base_model() if hasattr(model.model, 'get_base_model') else model.model
     if hasattr(base_model, 'initialize_tokenizer_wave_backbone_config'):
-        log_info("Initializing tokenizer and wave backbone config...")
+        log_message("INFO", "Initializing tokenizer and wave backbone config...", color="green")
         base_model.initialize_tokenizer_wave_backbone_config(model.tokenizer, 'cuda')
     else:
-        log_info("Warning: initialize_tokenizer_wave_backbone_config method not found")
+        log_message("WARNING", "initialize_tokenizer_wave_backbone_config method not found", color="yellow")
 
     # Verify wave_patch_token_id is set correctly
     wave_patch_token_id = getattr(model.model.config, 'wave_patch_token', None)
     if wave_patch_token_id is not None:
-        log_info(f"Wave patch token ID: {wave_patch_token_id}")
+        log_message("INFO", f"Wave patch token ID: {wave_patch_token_id}", color="green")
     else:
-        log_info("Warning: wave_patch_token_id not found in model config")
+        log_message("WARNING", "wave_patch_token_id not found in model config", color="yellow")
 
-    log_info("Model loaded successfully")
+    log_message("SUCCESS", "Model loaded successfully", color="green")
     return model, cfg
