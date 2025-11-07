@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, ConcatDataset
 import random
 import yaml
 import os.path as osp
-from termcolor import colored
+from src.logger import log_message
 
 import sys; sys.path.append('.')
 from src.llm.utils import conversation as conversation_lib
@@ -176,14 +176,12 @@ def preprocess(
 
         if cur_len < tokenizer.model_max_length:
             if cur_len != total_len:
-                print(colored(' ==================== ', "yellow"))
-                print(colored(str(targets), "yellow"))
-                print(colored(str(input_ids), "yellow"))
-                print(colored(' ==================== ', "yellow"))
+                log_message("DEBUG", "====================", color="yellow")
+                log_message("DEBUG", str(targets), color="yellow")
+                log_message("DEBUG", str(input_ids), color="yellow")
+                log_message("DEBUG", "====================", color="yellow")
                 target[:] = IGNORE_INDEX
-                print(colored("[WARNING]", "yellow") +
-                    f" tokenization mismatch precess_v3: {cur_len} vs. {total_len}."
-                    f" (ignored)")
+                log_message("WARNING", f"tokenization mismatch precess_v3: {cur_len} vs. {total_len}. (ignored)", color="yellow")
 
     return dict(
         input_ids=input_ids,
@@ -213,7 +211,7 @@ class WaveCaptionDataset(Dataset):
         self.opt = self._load_config(data_root, split)
         self.data = self._load_data()
         
-        print(colored("[INFO]", "green") + f" load {len(self.data)} data as {self.split} set")
+        log_message("LOAD", f"load {len(self.data)} data as {self.split} set", color="green")
     
     def _load_config(self, data_root, split):
         """Load configuration based on split type."""
@@ -456,21 +454,21 @@ if __name__ == "__main__":
     #     print(f"Wave embed shape: {train_item['wave_embed'].shape}")
     
     # Test test mode
-    print(colored("\n=== TEST MODE ===", "cyan"))
+    log_message("DEBUG", "=== TEST MODE ===", color="cyan")
     test_dataset = WaveCaptionDataset(data_root=data_root, split="test_QAs", tokenizer=tokenizer)
-    
+
     test_item = test_dataset[0]
-    print(colored("---", "cyan"))
-    print(colored(f"[DEBUG] Question: {test_item['question']}", "cyan"))
-    print(colored(f"[DEBUG] Answer: {test_item['answer']}", "cyan"))
-    
+    log_message("DEBUG", "---", color="cyan")
+    log_message("DEBUG", f"Question: {test_item['question']}", color="cyan")
+    log_message("DEBUG", f"Answer: {test_item['answer']}", color="cyan")
+
     test_item = test_dataset[1]
-    print(colored("---", "cyan"))
-    print(colored(f"[DEBUG] Question: {test_item['question']}", "cyan"))
-    print(colored(f"[DEBUG] Answer: {test_item['answer']}", "cyan"))
-    
+    log_message("DEBUG", "---", color="cyan")
+    log_message("DEBUG", f"Question: {test_item['question']}", color="cyan")
+    log_message("DEBUG", f"Answer: {test_item['answer']}", color="cyan")
+
     test_item = test_dataset[2]
-    print(colored("---", "cyan"))
-    print(colored(f"[DEBUG] Question: {test_item['question']}", "cyan"))
-    print(colored(f"[DEBUG] Answer: {test_item['answer']}", "cyan"))
+    log_message("DEBUG", "---", color="cyan")
+    log_message("DEBUG", f"Question: {test_item['question']}", color="cyan")
+    log_message("DEBUG", f"Answer: {test_item['answer']}", color="cyan")
     

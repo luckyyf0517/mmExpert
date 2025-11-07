@@ -430,4 +430,5 @@ conv_templates = {
 
 
 if __name__ == "__main__":
-    print(default_conversation.get_prompt())
+    from src.logger import log_message
+    log_message("DEBUG", default_conversation.get_prompt(), color="cyan")

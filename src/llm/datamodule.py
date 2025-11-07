@@ -3,10 +3,10 @@
 import os
 import torch
 from torch.utils.data import DataLoader
-from termcolor import colored
 import pytorch_lightning as pl
 from transformers import AutoTokenizer
 from easydict import EasyDict
+from src.logger import log_message
 
 # Constants for wave tokens
 DEFAULT_WAVE_INDICATOR = "<wave>"
@@ -194,7 +194,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
             start_end_tokens = [DEFAULT_WAVE_START_TOKEN, DEFAULT_WAVE_END_TOKEN]
             num_new_tokens += self.tokenizer.add_tokens(start_end_tokens, special_tokens=True)
 
-        print(colored("[INFO]", "green") + f" Added {num_new_tokens} wave tokens to tokenizer")
+        log_message("INFO", f"Added {num_new_tokens} wave tokens to tokenizer", color="green")
 
     def _format_conversation(self, question, answer):
         """Format question and answer into conversation format with wave indicator."""

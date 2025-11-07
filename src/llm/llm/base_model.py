@@ -2,6 +2,7 @@
 
 import torch
 from transformers import PreTrainedModel
+from src.logger import log_message
 
 
 class WaveBaseModel(PreTrainedModel):
@@ -76,11 +77,11 @@ class WaveBaseModel(PreTrainedModel):
 
         # Debug logging
         if hasattr(self, '_debug_wave_fusion') and self._debug_wave_fusion:
-            print(f"[DEBUG] Wave token replacement:")
-            print(f"  Total wave_patch_tokens found: {total_wave_tokens_found}")
-            print(f"  Total wave_patch_tokens replaced: {total_wave_tokens_replaced}")
-            print(f"  Input wave_embeds shape: {input_wave_embeds.shape}")
-            print(f"  Replacement rate: {total_wave_tokens_replaced}/{total_wave_tokens_found}")
+            log_message("DEBUG", "Wave token replacement:", color="cyan")
+            log_message("DEBUG", f"Total wave_patch_tokens found: {total_wave_tokens_found}", color="cyan")
+            log_message("DEBUG", f"Total wave_patch_tokens replaced: {total_wave_tokens_replaced}", color="cyan")
+            log_message("DEBUG", f"Input wave_embeds shape: {input_wave_embeds.shape}", color="cyan")
+            log_message("DEBUG", f"Replacement rate: {total_wave_tokens_replaced}/{total_wave_tokens_found}", color="cyan")
 
         result_embeds = torch.stack(new_embeds)
         result_masks = torch.stack(new_masks)

@@ -3,10 +3,10 @@
 import os
 import torch
 import torch.nn as nn
-from termcolor import colored
 import pytorch_lightning as pl
 from transformers import get_cosine_schedule_with_warmup
 from peft import LoraConfig, get_peft_model, TaskType
+from src.logger import log_message
 
 from .llm.model_factory import ModelFactory
 
@@ -233,9 +233,9 @@ class WaveLLMTrainer(pl.LightningModule):
                         module_type = 'other'
                     module_types[module_type] = module_types.get(module_type, 0) + 1
                 
-                print(colored("[INFO]", "green") + f" Auto-found {len(target_modules)} linear modules for LoRA")
-                print(f"   Module breakdown: {', '.join([f'{k}: {v}' for k, v in sorted(module_types.items())])}")
-                print(f"   Excluded: lm_head and modules containing [{', '.join(multimodal_keywords)}]")
+                log_message("INFO", f"Auto-found {len(target_modules)} linear modules for LoRA", color="green")
+                log_message("CONFIG", f"Module breakdown: {', '.join([f'{k}: {v}' for k, v in sorted(module_types.items())])}", color="blue")
+                log_message("CONFIG", f"Excluded: lm_head and modules containing [{', '.join(multimodal_keywords)}]", color="blue")
         else: 
             raise NotImplementedError("Manual setting target modules is not supported yet")
         
@@ -479,8 +479,7 @@ class WaveLLMTrainer(pl.LightningModule):
         with open(self.output_file, 'w', encoding='utf-8') as f:
             json.dump({}, f, indent=2, ensure_ascii=False)
         
-        if _is_rank_0():
-            print(colored("[INFO]", "green") + f" Initializing result file: {self.output_file}")
+        log_message("INFO", f"Initializing result file: {self.output_file}", color="green")
         
     def test_step(self, batch, batch_idx):
         """Generate predictions and save to JSON file"""
@@ -518,13 +517,13 @@ class WaveLLMTrainer(pl.LightningModule):
             
             # Print result (only on rank 0, print all samples)
             if _is_rank_0():
-                print(colored(f"\n[Sample {sample_idx}]:", "cyan"))
+                log_message("SAMPLE", f"\nSample {sample_idx}:", color="cyan")
                 if question:
-                    print(colored("Question:", "blue"), question)
-                print(colored("Prediction:", "green"), preds[i] if i < len(preds) else "")
+                    log_message("QUESTION", question, color="blue")
+                log_message("PREDICTION", preds[i] if i < len(preds) else "", color="green")
                 if answer:
-                    print(colored("Ground Truth:", "yellow"), answer)
-                print("-" * 50)
+                    log_message("GROUND_TRUTH", answer, color="yellow")
+                log_message("", "-" * 50, color="cyan")
         
         # Write updated results
         with open(self.output_file, 'w', encoding='utf-8') as f:
@@ -642,14 +641,14 @@ class WaveLLMTrainer(pl.LightningModule):
         if _is_rank_0():
             ratio = (trainable_params / total_params * 100) if total_params > 0 else 0.0
             header = f"Trainable params: {trainable_params:,} / {total_params:,} ({ratio:.2f}%)"
-            print(colored("[INFO]", "green") + f" {header}")
+            log_message("INFO", header, color="green")
 
-            print(colored("[INFO]", "green") + " Breakdown (trainable):")
+            log_message("INFO", "Breakdown (trainable):", color="green")
             for key, value in breakdown.items():
                 if value == 0:
                     continue
                 percent = value / trainable_params * 100 if trainable_params > 0 else 0.0
-                print(colored("[INFO]", "green") + f"   - {key:<24}: {value:,} ({percent:.2f}%)")
+                log_message("INFO", f"   - {key:<24}: {value:,} ({percent:.2f}%)", color="green")
 
             frozen_params = total_params - trainable_params
-            print(colored("[INFO]", "green") + f" Frozen params: {frozen_params:,}")
+            log_message("INFO", f"Frozen params: {frozen_params:,}", color="green")
