@@ -9,8 +9,8 @@ model_cfg:
     model_max_length: 2048
 
   peft_config:
-    r: 16
-    lora_alpha: 32
+    r: 8
+    lora_alpha: 16
     lora_dropout: 0.05
     bias: "none"
     auto_find_target_modules: true  # Auto-find all linear layers (except lm_head and multimodal modules)
@@ -23,6 +23,7 @@ model_cfg:
 data_cfg:
   model_path: "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/0a67737cc96d2554230f90338b163bc6380a2a85"
   model_max_length: 2048
+  batch_size: 6
   train_split: "train_QAs"
   test_split: "test_QAs"
 

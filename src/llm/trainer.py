@@ -510,35 +510,104 @@ class WaveLLMTrainer(pl.LightningModule):
                 'azimuth_time': batch['mmwave_features']['azimuth_time'][i:i+1].to(device)
             }
             
+            # Debug: Check if wave_patch_token exists in tokenizer and input
+            wave_patch_token_id = getattr(self.model.config, 'wave_patch_token', None)
+            if wave_patch_token_id is not None and _is_rank_0():
+                print(f"[DEBUG] wave_patch_token_id: {wave_patch_token_id}")
+                # Check if input_ids contains wave_patch_token
+                if wave_patch_token_id in input_ids_single[0]:
+                    wave_count = (input_ids_single[0] == wave_patch_token_id).sum().item()
+                    print(f"[DEBUG] Found {wave_count} wave_patch_tokens in input")
+                else:
+                    print(f"[DEBUG] No wave_patch_token found in input_ids")
+                    # Try to decode the input to see what's happening
+                    decoded_input = self.tokenizer.decode(input_ids_single[0], skip_special_tokens=False)
+                    print(f"[DEBUG] Decoded input: '{decoded_input}'")
+            elif _is_rank_0():
+                print(f"[DEBUG] wave_patch_token_id is None!")
+
             # Process mmwave features through encoder and projection
             mmwave_embeds_single = self._process_mmwave_features(mmwave_features_single)
-            
-            # Generate using input_ids and mmwave_embeds
-            # The model's forward method will handle the fusion automatically
+
+            if _is_rank_0():
+                print(f"[DEBUG] mmwave_embeds_single shape: {mmwave_embeds_single.shape}")
+
+            # Debug: Test wave feature fusion by doing a forward pass
             with torch.no_grad():
-                generate_kwargs = {
-                    'input_ids': input_ids_single,
-                    'input_wave_embeds': mmwave_embeds_single,
-                    'attention_mask': attention_mask_single,
-                    'pad_token_id': self.tokenizer.pad_token_id,
-                    'eos_token_id': self.tokenizer.eos_token_id,
-                    # Generation parameters
-                    'do_sample': True,
-                    'temperature': 1.0,
-                    'top_k': 50,
-                    'top_p': 0.95,
-                    'num_beams': 4,
-                    'max_new_tokens': 30,
-                }
-                
-                # Generate using the model
-                # The model's prepare_inputs_for_generation will handle mmwave_embeds
-                outputs = self.model.generate(**generate_kwargs)
-            
-            # Decode response
-            input_length = input_ids_single.shape[1]
-            response_ids = outputs[0][input_length:]
-            response = self.tokenizer.decode(response_ids, skip_special_tokens=True)
+                test_outputs = self.model(
+                    input_ids=input_ids_single,
+                    input_wave_embeds=mmwave_embeds_single,
+                    attention_mask=attention_mask_single,
+                    return_dict=True
+                )
+                if _is_rank_0():
+                    print(f"[DEBUG] Test forward pass successful")
+                    print(f"[DEBUG] Test logits shape: {test_outputs.logits.shape}")
+                    max_logit = test_outputs.logits.max().item()
+                    min_logit = test_outputs.logits.min().item()
+                    print(f"[DEBUG] Logits range: [{min_logit:.3f}, {max_logit:.3f}]")
+
+                    # Check first few generated tokens via greedy decoding from logits
+                    greedy_ids = torch.argmax(test_outputs.logits[0, -10:, :], dim=-1)  # Last 10 positions
+                    greedy_tokens = self.tokenizer.decode(greedy_ids, skip_special_tokens=True)
+                    print(f"[DEBUG] Greedy prediction from last 10 logits: '{greedy_tokens}'")
+
+                    # Deep dive into the problematic tokens
+                    print(f"[DEBUG] Last 10 greedy token IDs: {greedy_ids.tolist()}")
+                    for i, token_id in enumerate(greedy_ids):
+                        token_text = self.tokenizer.decode([token_id], skip_special_tokens=False)
+                        token_text_clean = self.tokenizer.decode([token_id], skip_special_tokens=True)
+                        print(f"[DEBUG] Token {i}: ID={token_id}, no_skip='{token_text}', clean='{token_text_clean}'")
+
+                    # Check what the most likely tokens are for the last position
+                    last_logits = test_outputs.logits[0, -1, :]
+                    top_10_ids = torch.topk(last_logits, 10).indices.tolist()
+                    print(f"[DEBUG] Top 10 most likely tokens at last position:")
+                    for i, token_id in enumerate(top_10_ids):
+                        token_text = self.tokenizer.decode([token_id], skip_special_tokens=True)
+                        print(f"[DEBUG]   {i}: ID={token_id} -> '{token_text}'")
+
+                    # Check if we have the same token repeated
+                    unique_tokens = torch.unique(greedy_ids)
+                    print(f"[DEBUG] Unique tokens in greedy prediction: {unique_tokens.tolist()} (out of {len(greedy_ids)} tokens)")
+
+            # Generate using input_ids and mmwave_embeds
+            # Following the reference code's strategy exactly
+            self.model.eval()
+            with torch.inference_mode():
+                # Use autocast like reference code
+                with torch.autocast('cuda', dtype=torch.bfloat16):
+                    # Create attention mask if None like reference code
+                    if attention_mask_single is None:
+                        attention_mask_single = torch.ones(input_ids_single.shape, dtype=torch.long, device=input_ids_single.device)
+
+                    if _is_rank_0():
+                        print(f"[DEBUG] Starting generation...")
+
+                    # Use reference code parameters exactly
+                    outputs = self.model.generate(
+                        input_ids_single,
+                        input_wave_embeds=mmwave_embeds_single,
+                        attention_mask=attention_mask_single,
+                        do_sample=True,         # Same as reference
+                        temperature=1.0,         # Same as reference
+                        top_k=50,               # Same as reference
+                        num_beams=4,            # Same as reference (beam_size=4)
+                        max_new_tokens=30,      # Same as reference
+                        top_p=0.95              # Same as reference
+                    )
+
+                    if _is_rank_0():
+                        print(f"[DEBUG] Generation completed")
+                        print(f"[DEBUG] Output shape: {outputs.shape}")
+
+            # Decode response following reference code
+            input_token_len = input_ids_single.shape[1]
+            n_diff_input_output = (input_ids_single != outputs[0, :input_token_len]).sum().item()
+            if n_diff_input_output > 0:
+                print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
+
+            response = self.tokenizer.decode(outputs[0, input_token_len:], skip_special_tokens=True)
             responses.append(response.strip())
         
         return responses

@@ -40,20 +40,31 @@ class WaveBaseModel(PreTrainedModel):
         new_embeds = []
         new_masks = []
 
+        # Debug: Track wave token replacement
+        total_wave_tokens_found = 0
+        total_wave_tokens_replaced = 0
+
         for batch_idx in range(batch_size):
             sample_embeds = []
             sample_mask = []
             wave_idx = 0
+            wave_tokens_in_sample = 0
 
             for seq_idx in range(input_ids.shape[1]):
                 current_token_id = input_ids[batch_idx, seq_idx].item()
 
                 if current_token_id == wave_patch_token_id:
+                    wave_tokens_in_sample += 1
                     # Replace this wave_patch_token with mmwave embeddings
                     if wave_idx < input_wave_embeds.shape[1]:
                         sample_embeds.append(input_wave_embeds[batch_idx, wave_idx])
                         sample_mask.append(1)
                         wave_idx += 1
+                        total_wave_tokens_replaced += 1
+                    else:
+                        # No more wave features available, keep original
+                        sample_embeds.append(inputs_embeds[batch_idx, seq_idx])
+                        sample_mask.append(attention_mask[batch_idx, seq_idx].item())
                 else:
                     # Regular token, keep original embedding
                     sample_embeds.append(inputs_embeds[batch_idx, seq_idx])
@@ -61,8 +72,17 @@ class WaveBaseModel(PreTrainedModel):
 
             new_embeds.append(torch.stack(sample_embeds))
             new_masks.append(torch.tensor(sample_mask, dtype=torch.long, device=device))
+            total_wave_tokens_found += wave_tokens_in_sample
+
+        # Debug logging
+        if hasattr(self, '_debug_wave_fusion') and self._debug_wave_fusion:
+            print(f"[DEBUG] Wave token replacement:")
+            print(f"  Total wave_patch_tokens found: {total_wave_tokens_found}")
+            print(f"  Total wave_patch_tokens replaced: {total_wave_tokens_replaced}")
+            print(f"  Input wave_embeds shape: {input_wave_embeds.shape}")
+            print(f"  Replacement rate: {total_wave_tokens_replaced}/{total_wave_tokens_found}")
 
         result_embeds = torch.stack(new_embeds)
         result_masks = torch.stack(new_masks)
-        
+
         return result_embeds, result_masks

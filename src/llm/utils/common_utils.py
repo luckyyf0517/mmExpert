@@ -36,8 +36,8 @@ def override_config(cfg_obj, attr_name, arg_value, arg_name):
         log_info(f"Using {arg_name} from command line: {arg_value}")
 
 
-def load_and_verify_projection_layers(model, checkpoint_path):
-    """Load and verify projection layers from checkpoint
+def load_non_lora_trainables(model, checkpoint_path):
+    """Load non-LoRA trainable parameters (reference code approach)
 
     Args:
         model: WaveLLMTrainer model instance
@@ -48,40 +48,42 @@ def load_and_verify_projection_layers(model, checkpoint_path):
     """
     from safetensors.torch import load_file
 
-    # Load non-LoRA trainables (mm_projection_layers)
-    projection_path = os.path.join(checkpoint_path, "non_lora_trainables.safetensors")
-    if not os.path.exists(projection_path):
-        raise FileNotFoundError(f"Projection layers file not found: {projection_path}")
+    # Load non-LoRA trainable parameters
+    non_lora_path = os.path.join(checkpoint_path, "non_lora_trainables.safetensors")
+    if not os.path.exists(non_lora_path):
+        raise FileNotFoundError(f"Non-LoRA parameters file not found: {non_lora_path}")
 
-    log_info(f"Loading projection layers from {projection_path}")
-    non_lora_state = load_file(projection_path)
+    log_info(f"Loading non-LoRA trainable parameters from {non_lora_path}")
+    non_lora_state = load_file(non_lora_path)
 
-    # Verify that we have the expected keys
+    # Verify we have the expected parameters
     expected_keys = {'mm_projection_layers.weight', 'mm_projection_layers.bias'}
     actual_keys = set(non_lora_state.keys())
     missing_keys = expected_keys - actual_keys
-    unexpected_keys = actual_keys - expected_keys
 
     if missing_keys:
-        raise ValueError(f"Missing expected keys in projection layers: {missing_keys}")
-    if unexpected_keys:
-        log_info(f"Warning: Unexpected keys in projection layers (will be ignored): {unexpected_keys}")
+        raise ValueError(f"Missing expected parameters: {missing_keys}")
 
-    # Load projection layers directly (cleaner than load_state_dict with strict=False)
-    projection_state = {
-        'weight': non_lora_state['mm_projection_layers.weight'],
-        'bias': non_lora_state['mm_projection_layers.bias']
-    }
-
+    # Load non-LoRA parameters into the model using strict=False (like reference code)
     try:
-        model.mm_projection_layers.load_state_dict(projection_state)
-        log_info("Projection layers loaded successfully")
+        model.model.load_state_dict(non_lora_state, strict=False)
+        log_info(f"Non-LoRA trainable parameters loaded successfully: {len(non_lora_state)} parameters")
+
+        # Log what we loaded (excluding projection layers which we expect)
+        other_keys = actual_keys - expected_keys
+        if other_keys:
+            log_info(f"  Also loaded: {len(other_keys)} other parameters (likely embeddings)")
+            for key in list(other_keys)[:5]:  # Show first 5 as examples
+                log_info(f"    - {key}")
+            if len(other_keys) > 5:
+                log_info(f"    - ... and {len(other_keys) - 5} more")
+
     except RuntimeError as e:
-        raise RuntimeError(f"Failed to load projection layers: {e}") from e
+        raise RuntimeError(f"Failed to load non-LoRA parameters: {e}") from e
 
 
 def save_training_artifacts(model, output_dir):
-    """Save LoRA adapter and projection layers in safetensors format
+    """Save LoRA adapter and non-LoRA trainable parameters (reference code approach)
 
     Args:
         model: WaveLLMTrainer model instance
@@ -95,18 +97,14 @@ def save_training_artifacts(model, output_dir):
 
     log_info(f"Saving training artifacts to {output_dir}")
 
-    # Use PEFT's get_peft_model_state_dict to get ONLY adapter weights (no embeddings)
-    # This is the proper way to extract LoRA parameters without unwanted base model weights
+    # Save LoRA adapter weights (PEFT standard)
     lora_state_dict = get_peft_model_state_dict(model.model)
-
-    # Make tensors contiguous for safetensors
     lora_state_dict = {k: v.contiguous() for k, v in lora_state_dict.items()}
 
-    # Save LoRA adapter weights
     save_file(lora_state_dict, os.path.join(output_dir, "adapter_model.safetensors"))
     log_info(f"LoRA adapter saved: {len(lora_state_dict)} parameters")
 
-    # Save LoRA config (need to extract from model.model.peft_config)
+    # Save LoRA config
     adapter_config = model.model.peft_config['default'].to_dict()
 
     # Convert sets to lists for JSON serialization
@@ -120,29 +118,32 @@ def save_training_artifacts(model, output_dir):
         return obj
 
     adapter_config = make_json_serializable(adapter_config)
-
     with open(os.path.join(output_dir, "adapter_config.json"), 'w') as f:
         json.dump(adapter_config, f, indent=2)
     log_info(f"LoRA config saved (adapter_config.json)")
 
-    # Calculate LoRA size
+    # Save non-LoRA trainable parameters (matching reference code exactly)
+    # This includes embeddings, projection layers, and other trainable parameters
+    model_state_dict = model.model.state_dict()
+
+    # Get all non-LoRA trainable parameters (same as reference code's get_peft_state_non_lora)
+    non_lora_state_dict = {}
+    for name, param in model.model.named_parameters():
+        if "lora_" not in name and param.requires_grad:
+            non_lora_state_dict[name] = model_state_dict[name].contiguous()
+            log_info(f"  Including non-LoRA trainable param: {name} (shape: {param.shape})")
+
+    # Save non-LoRA parameters
+    save_file(non_lora_state_dict, os.path.join(output_dir, "non_lora_trainables.safetensors"))
+    log_info(f"Non-LoRA trainable parameters saved: {len(non_lora_state_dict)} parameters")
+
+    # Calculate sizes
     lora_size = sum(p.numel() * p.element_size() for p in lora_state_dict.values()) / 1024 / 1024
+    non_lora_size = sum(p.numel() * p.element_size() for p in non_lora_state_dict.values()) / 1024 / 1024
+
     log_info(f"LoRA adapter size: {lora_size:.2f} MB")
-
-    # Save mm_projection_layers as safetensors
-    projection_state_dict = {
-        'mm_projection_layers.weight': model.mm_projection_layers.weight.contiguous(),
-        'mm_projection_layers.bias': model.mm_projection_layers.bias.contiguous()
-    }
-    projection_path = os.path.join(output_dir, "non_lora_trainables.safetensors")
-    save_file(projection_state_dict, projection_path)
-    log_info(f"Projection layers saved to non_lora_trainables.safetensors")
-
-    # Calculate projection size
-    proj_size = sum(p.numel() * p.element_size() for p in projection_state_dict.values()) / 1024 / 1024
-    log_info(f"Projection layers size: {proj_size:.2f} MB")
-
-    log_info(f"Training artifacts saved successfully! Total size: {lora_size + proj_size:.2f} MB")
+    log_info(f"Non-LoRA trainable size: {non_lora_size:.2f} MB")
+    log_info(f"Training artifacts saved successfully! Total: {lora_size + non_lora_size:.2f} MB")
 
 
 def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
@@ -200,8 +201,8 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
         # PEFT supports safetensors directly, just use from_pretrained
         model.model = PeftModel.from_pretrained(model.model, checkpoint_path)
 
-    # Load and verify projection layers using shared function
-    load_and_verify_projection_layers(model, checkpoint_path)
+    # Load non-LoRA trainable parameters (reference code approach)
+    load_non_lora_trainables(model, checkpoint_path)
 
     model.eval()
     # Move entire model to GPU
@@ -214,6 +215,20 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
 
     # Set tokenizer padding_side to 'left' for decoder-only generation
     model.tokenizer.padding_side = 'left'
+
+    # IMPORTANT: Initialize tokenizer and wave backbone config (like reference code)
+    if hasattr(model.model, 'initialize_tokenizer_wave_backbone_config'):
+        log_info("Initializing tokenizer and wave backbone config...")
+        model.model.initialize_tokenizer_wave_backbone_config(model.tokenizer, 'cuda')
+    else:
+        log_info("Warning: initialize_tokenizer_wave_backbone_config method not found")
+
+    # Verify wave_patch_token_id is set correctly
+    wave_patch_token_id = getattr(model.model.config, 'wave_patch_token', None)
+    if wave_patch_token_id is not None:
+        log_info(f"Wave patch token ID: {wave_patch_token_id}")
+    else:
+        log_info("Warning: wave_patch_token_id not found in model config")
 
     log_info("Model loaded successfully")
     return model, cfg

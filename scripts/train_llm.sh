@@ -15,9 +15,9 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     train_llm.py \
     --config config/llm/phi3.yaml \
     --data_root ${DATA_ROOT} \
-    --batch_size 8 \
+    --batch_size 6 \
     --num_workers 4 \
-    --max_epochs 10 \
+    --max_epochs 2 \
     --gradient_accumulation_steps 1 \
     --zero_stage 2 \
     --dtype bf16
