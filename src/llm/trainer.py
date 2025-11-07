@@ -523,7 +523,7 @@ class WaveLLMTrainer(pl.LightningModule):
                 log_message("PREDICTION", preds[i] if i < len(preds) else "", color="green")
                 if answer:
                     log_message("GROUND_TRUTH", answer, color="yellow")
-                log_message("", "-" * 50, color="cyan")
+                print("-" * 50)
         
         # Write updated results
         with open(self.output_file, 'w', encoding='utf-8') as f:
@@ -585,8 +585,24 @@ class WaveLLMTrainer(pl.LightningModule):
 
             # Decode response following reference code
             input_token_len = input_ids_single.shape[1]
-            response = self.tokenizer.decode(outputs[0, input_token_len:], skip_special_tokens=True)
-            responses.append(response.strip())
+            
+            # Check if input and output match (like reference code)
+            n_diff_input_output = (input_ids_single != outputs[0, :input_token_len]).sum().item()
+            if n_diff_input_output > 0:
+                log_message("WARNING", f"{n_diff_input_output} output_ids are not the same as the input_ids", color="yellow")
+            
+            # Extract only new tokens (following reference code)
+            new_tokens = outputs[0, input_token_len:]
+            
+            # Decode following reference code style (batch_decode for single sample)
+            response = self.tokenizer.batch_decode([new_tokens], skip_special_tokens=True)[0]
+            response = response.strip()
+            
+            # Log empty generation for debugging
+            if not response:
+                log_message("WARNING", f"Empty generation detected for sample {i}, new_tokens length: {len(new_tokens)}", color="yellow")
+            
+            responses.append(response)
         
         return responses
 

@@ -51,154 +51,13 @@ DEFAULT_QUESTION_PROMPTS = [
     "Given the radar signals, describe the motion of the human body in detail."
 ]
 
-@dataclass
-class DataCollatorForWaveTextDataset(object):
-    """Collate examples for mixed dataset with text and wave data."""
 
-    tokenizer: transformers.PreTrainedTokenizer
+# NOTE: The following functions have been removed as they were unused:
+# - DataCollatorForWaveTextDataset: Collation is handled by datamodule.py
+# - preprocess_multimodal_wave: Preprocessing is handled by datamodule.py
+# - preprocess: Label masking logic is in datamodule.py (with correct +1 fix)
+# - make_object_wave_data_module: DataModule pattern is used instead
 
-    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        input_ids, labels = tuple([instance[key] for instance in instances]
-                                  for key in ("input_ids", "labels"))
-        input_ids = torch.nn.utils.rnn.pad_sequence(
-            input_ids,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id)
-        labels = torch.nn.utils.rnn.pad_sequence(labels,
-                                                 batch_first=True,
-                                                 padding_value=IGNORE_INDEX)
-        batch = dict(
-            input_ids=input_ids,
-            labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
-        )
-
-        if "wave_token" in instances[0].keys():
-            wave = [instance['wave_token'] for instance in instances]
-            batch['input_wave_tokens'] = torch.stack(wave)
-        
-        if "wave_embed" in instances[0].keys():
-            # Stack radar data: range_time, doppler_time, azimuth_time
-            # Keep original [B, H, W] format for each view, encoder will handle processing
-            range_data = torch.stack([instance['wave_embed']['range_time'] for instance in instances])  # [B, 256, T]
-            doppler_data = torch.stack([instance['wave_embed']['doppler_time'] for instance in instances])  # [B, 128, T]
-            azimuth_data = torch.stack([instance['wave_embed']['azimuth_time'] for instance in instances])  # [B, 128, T]
-            
-            # Pass as dict to encoder - encoder will handle all processing and return [B, N, C] features
-            batch['radar_data'] = {
-                'range_time': range_data,
-                'doppler_time': doppler_data,
-                'azimuth_time': azimuth_data
-            }
-            
-        return batch
-
-
-def preprocess_multimodal_wave(
-    sources: Sequence[str],
-    wave_indicator: str = DEFAULT_WAVE_INDICATOR,
-    default_wave_patch_token: str = DEFAULT_WAVE_PATCH_TOKEN,
-    wave_token_len: int = DEFAULT_WAVE_TOKEN_LEN,
-    mm_use_wave_start_end: bool = True,
-    default_wave_start_token: str = DEFAULT_WAVE_START_TOKEN,
-    default_wave_end_token: str = DEFAULT_WAVE_END_TOKEN
-) -> Dict:
-    """Preprocess multimodal wave data by replacing wave indicators with tokens."""
-    for source in sources:
-        for sentence in source:
-            replace_token = default_wave_patch_token * wave_token_len 
-            if mm_use_wave_start_end:
-                replace_token = default_wave_start_token + replace_token + default_wave_end_token
-            if sentence["value"] is not None:
-                sentence["value"] = sentence["value"].replace(wave_indicator, replace_token)
-
-    return sources
-
-def preprocess(
-    sources,
-    tokenizer: transformers.PreTrainedTokenizer,
-) -> Dict:
-    conv = conversation_lib.default_conversation.copy()
-    roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
-
-    # Apply prompt templates
-    conversations = []
-    for i, source in enumerate(sources):
-        if roles[source[0]["from"]] != conv.roles[0]:
-            # Skip the first one if it is not from human
-            source = source[1:]
-
-        conv.messages = []
-        for j, sentence in enumerate(source):
-            role = roles[sentence["from"]]
-            assert role == conv.roles[j % 2], f"{i}"
-            conv.append_message(role, sentence["value"])
-        conversations.append(conv.get_prompt())
-
-    # Tokenize conversations
-    input_ids = tokenizer(
-        conversations,
-        return_tensors="pt",
-        padding="longest",
-        max_length=tokenizer.model_max_length,
-        truncation=True,
-    ).input_ids
-    targets = input_ids.clone()
-    assert conv.sep_style == conversation_lib.SeparatorStyle.MPT, conv.sep_style
-
-    # Mask targets
-    sep = conv.roles[1]
-    for conversation, target in zip(conversations, targets):
-        total_len = int(target.ne(tokenizer.pad_token_id).sum())
-
-        rounds = conversation.split(conv.sep)
-        re_rounds = [conv.sep.join(rounds[:3])] # system + user + gpt
-        for conv_idx in range(3, len(rounds), 2):
-            re_rounds.append(conv.sep.join(rounds[conv_idx:conv_idx+2]))    # user + gpt
-        cur_len = 0
-        target[:cur_len] = IGNORE_INDEX
-        for i, rou in enumerate(re_rounds):
-            if rou == "":
-                break
-
-            parts = rou.split(sep)
-            if len(parts) != 2:
-                break
-            parts[0] += sep
-
-            round_len = len(tokenizer(rou).input_ids)
-            instruction_len = len(tokenizer(parts[0]).input_ids)
-
-            target[cur_len : cur_len + instruction_len] = IGNORE_INDEX
-
-            cur_len += round_len + 1
-        target[cur_len:] = IGNORE_INDEX
-
-        if cur_len < tokenizer.model_max_length:
-            if cur_len != total_len:
-                log_message("DEBUG", "====================", color="yellow")
-                log_message("DEBUG", str(targets), color="yellow")
-                log_message("DEBUG", str(input_ids), color="yellow")
-                log_message("DEBUG", "====================", color="yellow")
-                target[:] = IGNORE_INDEX
-                log_message("WARNING", f"tokenization mismatch precess_v3: {cur_len} vs. {total_len}. (ignored)", color="yellow")
-
-    return dict(
-        input_ids=input_ids,
-        labels=targets,
-    )
-
-
-def make_object_wave_data_module(tokenizer: transformers.PreTrainedTokenizer,
-                                  data_args):
-    return {
-        'train_dataset': WaveCaptionDataset(data_args.data_root,
-                              split=data_args.split,
-                              tokenizer=tokenizer),
-        'eval_dataset':
-        None,  # No validation dataset when split_train_val is False
-        'data_collator': DataCollatorForWaveTextDataset(tokenizer)
-    }
 
 class WaveCaptionDataset(Dataset):
     """Dataset for wave caption tasks with multimodal support."""
@@ -358,11 +217,14 @@ class WaveCaptionDataset(Dataset):
         }]
     
     def __getitem__(self, index):
+        """Get raw data item without preprocessing.
+        
+        Preprocessing is handled by datamodule.py's ConversationDatasetWrapper.
+        This method only loads and returns raw data: question, answer, wave_embed.
+        """
         instance = deepcopy(self.data[index])
         if instance['question'] is None:
             instance['question'] = self.default_question()
-        sample = preprocess_multimodal_wave([self.format_caption(instance['question'], instance['answer'])])
-        data_dict = preprocess(sample, self.tokenizer)
 
         # Load radar data from NPZ file using the same pipeline as base_dataset
         radar_data = load_radar_data(instance['filename'], self.opt)
@@ -374,39 +236,16 @@ class WaveCaptionDataset(Dataset):
             'azimuth_time': torch.tensor(radar_data['azimuth_time']).float()
         }
 
-        data_dict = dict(input_ids=data_dict["input_ids"][0],
-                        labels=data_dict["labels"][0],
-                        caption=instance['caption'],
-                        question=instance['question'],
-                        answer=instance['answer'],
-                        wave_embed=wave_embed)
-        return data_dict
+        # Return raw data only - preprocessing done by datamodule.py
+        return {
+            'question': instance['question'],
+            'answer': instance['answer'],
+            'caption': instance['caption'],
+            'wave_embed': wave_embed
+        }
     
 
-def mini_dataset(filename, tokenizer, question, answer, caption):
-    """Create a mini dataset sample for testing purposes."""
-    sample = preprocess_multimodal_wave([WaveCaptionDataset.format_caption(question, answer)])
-    data_dict = preprocess(sample, tokenizer)
-
-    # Load radar data from NPZ file using the same pipeline as base_dataset
-    opt = edict(DEFAULT_REAL_CONFIG)
-    radar_data = load_radar_data(filename, opt)
-
-    # Convert to tensors
-    wave_embed = {
-        'range_time': torch.tensor(radar_data['range_time']).float(),
-        'doppler_time': torch.tensor(radar_data['doppler_time']).float(),
-        'azimuth_time': torch.tensor(radar_data['azimuth_time']).float()
-    }
-
-    return dict(
-        input_ids=data_dict["input_ids"][0],
-        labels=data_dict["labels"][0],
-        caption=caption,
-        question=question,
-        answer=answer,
-        wave_embed=wave_embed
-    )
+# NOTE: mini_dataset() function has been removed as it was unused and called deleted preprocess().
 
 
 def init_tokenizer_only(model_path):

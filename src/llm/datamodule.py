@@ -101,7 +101,7 @@ def preprocess_with_conversation(sources, tokenizer, conversation_template="conv
 
             # Mask instruction part (only compute loss on assistant response)
             target[cur_len : cur_len + instruction_len] = IGNORE_INDEX
-            cur_len += round_len
+            cur_len += round_len + 1
 
         target[cur_len:] = IGNORE_INDEX
 
