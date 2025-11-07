@@ -36,7 +36,7 @@ def override_config(cfg_obj, attr_name, arg_value, arg_name):
         log_info(f"Using {arg_name} from command line: {arg_value}")
 
 
-def load_non_lora_trainables(model, checkpoint_path):
+def load_non_lora_trainables(model, checkpoint_path, require_grad_metadata=True):
     """Load non-LoRA trainable parameters (reference code approach)
 
     Args:
@@ -56,27 +56,43 @@ def load_non_lora_trainables(model, checkpoint_path):
     log_info(f"Loading non-LoRA trainable parameters from {non_lora_path}")
     non_lora_state = load_file(non_lora_path)
 
-    # Verify we have the expected parameters
-    expected_keys = {'mm_projection_layers.weight', 'mm_projection_layers.bias'}
+    # Enumerate trainable parameters (when available) to derive expected keys.
+    # During evaluation (without PEFT wrapping), requires_grad might be False,
+    # so fall back to trusting the checkpoint keys.
+    model_trainable_non_lora = {}
+    if require_grad_metadata:
+        model_trainable_non_lora = {
+            name: param
+            for name, param in model.model.named_parameters()
+            if "lora_" not in name and param.requires_grad
+        }
+
     actual_keys = set(non_lora_state.keys())
+    expected_keys = set(model_trainable_non_lora.keys()) if model_trainable_non_lora else actual_keys
+
     missing_keys = expected_keys - actual_keys
-
     if missing_keys:
-        raise ValueError(f"Missing expected parameters: {missing_keys}")
+        raise ValueError(f"Missing expected parameters in checkpoint: {missing_keys}")
 
-    # Load non-LoRA parameters into the model using strict=False (like reference code)
+    # Ensure all keys from checkpoint exist in model state dict
+    model_state_dict = model.model.state_dict()
+    invalid_keys = {key for key in actual_keys if key not in model_state_dict}
+    if invalid_keys:
+        raise ValueError(f"Checkpoint contains parameters not present in model: {invalid_keys}")
+
+    # Merge the provided non-LoRA tensors into the full state dict so we can load strictly
+    merged_state = model_state_dict.copy()
+    for key in actual_keys:
+        merged_state[key] = non_lora_state[key]
+
+    # Load non-LoRA parameters into the model using strict=True
+    # All expected parameters must be present, no extra parameters allowed
     try:
-        model.model.load_state_dict(non_lora_state, strict=False)
+        model.model.load_state_dict(merged_state, strict=True)
         log_info(f"Non-LoRA trainable parameters loaded successfully: {len(non_lora_state)} parameters")
-
-        # Log what we loaded (excluding projection layers which we expect)
-        other_keys = actual_keys - expected_keys
-        if other_keys:
-            log_info(f"  Also loaded: {len(other_keys)} other parameters (likely embeddings)")
-            for key in list(other_keys)[:5]:  # Show first 5 as examples
-                log_info(f"    - {key}")
-            if len(other_keys) > 5:
-                log_info(f"    - ... and {len(other_keys) - 5} more")
+        for key in sorted(actual_keys):
+            shape = tuple(non_lora_state[key].shape)
+            log_info(f"  Loaded: {key} (shape: {shape})")
 
     except RuntimeError as e:
         raise RuntimeError(f"Failed to load non-LoRA parameters: {e}") from e
@@ -123,7 +139,8 @@ def save_training_artifacts(model, output_dir):
     log_info(f"LoRA config saved (adapter_config.json)")
 
     # Save non-LoRA trainable parameters (matching reference code exactly)
-    # This includes embeddings, projection layers, and other trainable parameters
+    # This includes mm_projection_layers and other trainable parameters
+    # NOTE: mm_projection_layers is now registered as model.model.mm_projection_layers
     model_state_dict = model.model.state_dict()
 
     # Get all non-LoRA trainable parameters (same as reference code's get_peft_state_non_lora)
@@ -202,7 +219,9 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
         model.model = PeftModel.from_pretrained(model.model, checkpoint_path)
 
     # Load non-LoRA trainable parameters (reference code approach)
-    load_non_lora_trainables(model, checkpoint_path)
+    # During evaluation we rehydrate into a fresh base model without PEFT wrapping,
+    # so requires_grad metadata may be absent. Disable that check in this path.
+    load_non_lora_trainables(model, checkpoint_path, require_grad_metadata=False)
 
     model.eval()
     # Move entire model to GPU
@@ -210,16 +229,17 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
     # Explicitly move radar_encoder and projection layers to GPU
     if hasattr(model, 'radar_encoder'):
         model.radar_encoder = model.radar_encoder.cuda()
-    if hasattr(model, 'mm_projection_layers'):
-        model.mm_projection_layers = model.mm_projection_layers.cuda()
+    if hasattr(model.model, 'mm_projection_layers'):
+        model.model.mm_projection_layers = model.model.mm_projection_layers.cuda()
 
     # Set tokenizer padding_side to 'left' for decoder-only generation
     model.tokenizer.padding_side = 'left'
 
     # IMPORTANT: Initialize tokenizer and wave backbone config (like reference code)
-    if hasattr(model.model, 'initialize_tokenizer_wave_backbone_config'):
+    base_model = model.model.get_base_model() if hasattr(model.model, 'get_base_model') else model.model
+    if hasattr(base_model, 'initialize_tokenizer_wave_backbone_config'):
         log_info("Initializing tokenizer and wave backbone config...")
-        model.model.initialize_tokenizer_wave_backbone_config(model.tokenizer, 'cuda')
+        base_model.initialize_tokenizer_wave_backbone_config(model.tokenizer, 'cuda')
     else:
         log_info("Warning: initialize_tokenizer_wave_backbone_config method not found")
 

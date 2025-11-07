@@ -12,7 +12,7 @@ from src.llm.datamodule import WaveLLMDataModule
 from src.llm.trainer import WaveLLMTrainer
 
 # Import shared utility functions
-from src.llm.utils.common_utils import is_rank_0, log_info, override_config, load_and_verify_projection_layers, load_model_from_checkpoint
+from src.llm.utils.common_utils import is_rank_0, log_info, override_config, load_model_from_checkpoint
 
 
 def main():

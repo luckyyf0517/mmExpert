@@ -69,6 +69,26 @@ class Phi3ForCausalLM(WaveBaseModel, _Phi3ForCausalLM):
         # Replace self.model with our custom Phi3Model
         self.model = Phi3Model(config)
         self.post_init()
+        
+        # mm_projection_layers will be initialized later via initialize_wave_projection()
+        self.mm_projection_layers = None
+
+    def initialize_wave_projection(self, wave_feature_dim: int):
+        """Initialize wave feature projection layer
+        
+        Args:
+            wave_feature_dim: Dimension of wave features (radar encoder output)
+        """
+        if self.mm_projection_layers is not None:
+            # Already initialized
+            return
+        
+        # Create projection layer with model's dtype
+        model_dtype = next(self.parameters()).dtype
+        self.mm_projection_layers = nn.Linear(
+            wave_feature_dim, 
+            self.config.hidden_size
+        ).to(dtype=model_dtype)
 
     def get_output_embeddings(self):
         return self.lm_head

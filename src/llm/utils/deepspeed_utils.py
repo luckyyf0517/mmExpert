@@ -16,9 +16,14 @@ def get_train_ds_config(args):
     # Get world_size from environment if available (set by deepspeed launcher), otherwise use args
     world_size = int(os.environ.get('WORLD_SIZE', args.world_size))
     
+    micro_batch = args.batch_size if args.batch_size is not None else 1
+    grad_accum = getattr(args, 'gradient_accumulation_steps', None)
+    if grad_accum is None or grad_accum <= 0:
+        grad_accum = 1
+    
     ds_config = {
-        "train_batch_size": args.batch_size * world_size,
-        "train_micro_batch_size_per_gpu": args.batch_size,
+        "train_batch_size": micro_batch * grad_accum * world_size,
+        "train_micro_batch_size_per_gpu": micro_batch,
         # gradient_accumulation_steps is handled by PyTorch Lightning's accumulate_grad_batches
         "zero_optimization": {
             "stage": args.zero_stage,

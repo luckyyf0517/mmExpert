@@ -86,6 +86,16 @@ class WaveLLMTrainer(pl.LightningModule):
         # Resize model embeddings to accommodate new tokens
         self.model.resize_token_embeddings(len(self.tokenizer))
 
+        # Track newly-added token ids for selective training of embeddings
+        self._new_special_token_count = num_new_tokens
+        if num_new_tokens > 0:
+            vocab_size = self.model.get_input_embeddings().weight.shape[0]
+            self._new_special_token_start = vocab_size - num_new_tokens
+            self._new_special_token_ids = list(range(self._new_special_token_start, vocab_size))
+        else:
+            self._new_special_token_start = None
+            self._new_special_token_ids = []
+
         # Set token IDs in model config
         self.model.config.wave_patch_token = self.tokenizer.convert_tokens_to_ids([DEFAULT_WAVE_PATCH_TOKEN])[0]
 
@@ -151,10 +161,9 @@ class WaveLLMTrainer(pl.LightningModule):
         self.radar_encoder = encoder
         self.radar_encoder.eval()  # Freeze encoder
 
-        # Create projection layer
-        # Use model's dtype to ensure compatibility
-        model_dtype = next(self.model.parameters()).dtype
-        self.mm_projection_layers = nn.Linear(embed_dim, self.model.config.hidden_size).to(dtype=model_dtype)
+        # Initialize wave projection layer in the model
+        # Projection layer is created and owned by the model, not the trainer
+        self.model.initialize_wave_projection(embed_dim)
 
         # Freeze encoder parameters
         for param in self.radar_encoder.parameters():
@@ -195,9 +204,12 @@ class WaveLLMTrainer(pl.LightningModule):
         use_auto_find = self.cfg.peft_config.get('auto_find_target_modules', False)
         target_modules = self.cfg.peft_config.get('target_modules', None)
         
+        # Modules to exclude from LoRA (like reference code's do_not_add_lora_model)
+        # mm_projection_layers should remain trainable but not wrapped with LoRA
+        multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection_layers'])
+        
         # If auto_find_target_modules is True, always use auto-find (ignore configured target_modules)
         if use_auto_find:
-            multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection', 'projection'])
             target_modules = self._find_all_linear_names(self.model, multimodal_keywords=multimodal_keywords)
             if _is_rank_0():
                 # Group modules by type for cleaner output
@@ -223,16 +235,9 @@ class WaveLLMTrainer(pl.LightningModule):
                 
                 print(colored("[INFO]", "green") + f" Auto-found {len(target_modules)} linear modules for LoRA")
                 print(f"   Module breakdown: {', '.join([f'{k}: {v}' for k, v in sorted(module_types.items())])}")
-                print(f"   Excluded: lm_head and modules containing {multimodal_keywords}")
-        # If target_modules is None or empty, auto-find all linear layers
-        elif target_modules is None or len(target_modules) == 0:
-            multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection', 'projection'])
-            target_modules = self._find_all_linear_names(self.model, multimodal_keywords=multimodal_keywords)
-            if _is_rank_0():
-                print(colored("[INFO]", "green") + f" Auto-found {len(target_modules)} linear modules for LoRA (target_modules was empty)")
-        else:
-            if _is_rank_0():
-                print(colored("[INFO]", "green") + f" Using configured target_modules ({len(target_modules)} modules)")
+                print(f"   Excluded: lm_head and modules containing [{', '.join(multimodal_keywords)}]")
+        else: 
+            raise NotImplementedError("Manual setting target modules is not supported yet")
         
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
@@ -246,22 +251,69 @@ class WaveLLMTrainer(pl.LightningModule):
 
         self.model = get_peft_model(self.model, peft_config)
 
-        # Freeze base model except LoRA parameters
+        # Freeze base model except LoRA parameters, mm_projection_layers, and embeddings
+        # mm_projection_layers is excluded from LoRA target_modules and remains trainable
+        # Embeddings: only newly added tokens remain trainable via gradient masking
         for name, param in self.model.named_parameters():
-            if 'lora' not in name:
-                param.requires_grad = False
+            if 'lora' not in name and 'mm_projection_layers' not in name:
+                if 'embed_tokens' not in name and 'lm_head' not in name:
+                    param.requires_grad = False
 
-    def _print_trainable_parameters(self):
-        """Print number of trainable parameters"""
-        trainable_params = 0
-        all_param = 0
-        for _, param in self.named_parameters():
-            all_param += param.numel()
-            if param.requires_grad:
-                trainable_params += param.numel()
+        # Re-enable gradients for mm_projection_layers and embeddings explicitly (PEFT disables them by default)
+        base_model = self.model.get_base_model()
+        if hasattr(base_model, 'mm_projection_layers') and base_model.mm_projection_layers is not None:
+            base_model.mm_projection_layers.requires_grad_(True)
+            base_model.mm_projection_layers.weight.requires_grad = True
+            if base_model.mm_projection_layers.bias is not None:
+                base_model.mm_projection_layers.bias.requires_grad = True
 
-        if _is_rank_0():
-            print(colored("[INFO]", "green") + f" Trainable params: {trainable_params:,} || All params: {all_param:,} || Trainable%: {100 * trainable_params / all_param:.2f}%")
+        new_token_count = getattr(self, '_new_special_token_count', 0) or 0
+
+        input_embeds = self.model.get_input_embeddings()
+        if input_embeds is not None and hasattr(input_embeds, 'weight'):
+            weight = input_embeds.weight
+            if new_token_count > 0:
+                weight.requires_grad = True
+                start_idx = weight.shape[0] - new_token_count
+
+                def _mask_old_token_grads(grad):
+                    if grad is None:
+                        return None
+                    grad[:start_idx] = 0
+                    return grad
+
+                handle = getattr(self, '_input_embed_grad_hook', None)
+                if handle is not None:
+                    handle.remove()
+                self._input_embed_grad_hook = weight.register_hook(_mask_old_token_grads)
+            else:
+                weight.requires_grad = False
+                handle = getattr(self, '_input_embed_grad_hook', None)
+                if handle is not None:
+                    handle.remove()
+                    self._input_embed_grad_hook = None
+
+        # Some HuggingFace models tie lm_head with input embeddings; handle both cases safely
+        if hasattr(base_model, 'lm_head') and hasattr(base_model.lm_head, 'weight'):
+            lm_head_weight = base_model.lm_head.weight
+        elif hasattr(self.model, 'lm_head') and hasattr(self.model.lm_head, 'weight'):
+            lm_head_weight = self.model.lm_head.weight
+        else:
+            lm_head_weight = None
+
+        if lm_head_weight is not None:
+            handle = getattr(self, '_lm_head_grad_hook', None)
+            if handle is not None:
+                handle.remove()
+                self._lm_head_grad_hook = None
+
+            # Freeze lm_head (reference implementation keeps output embeddings fixed)
+            if lm_head_weight is input_embeds.weight:
+                # Shared embedding: avoid disabling gradients for input embeddings.
+                # In Phi-3 custom model lm_head is untied, so this branch should not trigger.
+                pass
+            else:
+                lm_head_weight.requires_grad = False
 
     def forward(self, batch):
         """
@@ -344,11 +396,11 @@ class WaveLLMTrainer(pl.LightningModule):
         mmwave_features_tensor = mmwave_features_tensor.to(dtype=model_dtype)
 
         # Ensure projection layer dtype matches input dtype
-        if mmwave_features_tensor.dtype != next(self.mm_projection_layers.parameters()).dtype:
-            self.mm_projection_layers = self.mm_projection_layers.to(dtype=mmwave_features_tensor.dtype)
+        if mmwave_features_tensor.dtype != next(self.model.mm_projection_layers.parameters()).dtype:
+            self.model.mm_projection_layers = self.model.mm_projection_layers.to(dtype=mmwave_features_tensor.dtype)
 
         # Project to model hidden size
-        mmwave_embeds = self.mm_projection_layers(mmwave_features_tensor)  # [B, T, H]
+        mmwave_embeds = self.model.mm_projection_layers(mmwave_features_tensor)  # [B, T, H]
 
         return mmwave_embeds
 
@@ -510,104 +562,94 @@ class WaveLLMTrainer(pl.LightningModule):
                 'azimuth_time': batch['mmwave_features']['azimuth_time'][i:i+1].to(device)
             }
             
-            # Debug: Check if wave_patch_token exists in tokenizer and input
-            wave_patch_token_id = getattr(self.model.config, 'wave_patch_token', None)
-            if wave_patch_token_id is not None and _is_rank_0():
-                print(f"[DEBUG] wave_patch_token_id: {wave_patch_token_id}")
-                # Check if input_ids contains wave_patch_token
-                if wave_patch_token_id in input_ids_single[0]:
-                    wave_count = (input_ids_single[0] == wave_patch_token_id).sum().item()
-                    print(f"[DEBUG] Found {wave_count} wave_patch_tokens in input")
-                else:
-                    print(f"[DEBUG] No wave_patch_token found in input_ids")
-                    # Try to decode the input to see what's happening
-                    decoded_input = self.tokenizer.decode(input_ids_single[0], skip_special_tokens=False)
-                    print(f"[DEBUG] Decoded input: '{decoded_input}'")
-            elif _is_rank_0():
-                print(f"[DEBUG] wave_patch_token_id is None!")
-
             # Process mmwave features through encoder and projection
             mmwave_embeds_single = self._process_mmwave_features(mmwave_features_single)
 
-            if _is_rank_0():
-                print(f"[DEBUG] mmwave_embeds_single shape: {mmwave_embeds_single.shape}")
-
-            # Debug: Test wave feature fusion by doing a forward pass
-            with torch.no_grad():
-                test_outputs = self.model(
-                    input_ids=input_ids_single,
-                    input_wave_embeds=mmwave_embeds_single,
-                    attention_mask=attention_mask_single,
-                    return_dict=True
-                )
-                if _is_rank_0():
-                    print(f"[DEBUG] Test forward pass successful")
-                    print(f"[DEBUG] Test logits shape: {test_outputs.logits.shape}")
-                    max_logit = test_outputs.logits.max().item()
-                    min_logit = test_outputs.logits.min().item()
-                    print(f"[DEBUG] Logits range: [{min_logit:.3f}, {max_logit:.3f}]")
-
-                    # Check first few generated tokens via greedy decoding from logits
-                    greedy_ids = torch.argmax(test_outputs.logits[0, -10:, :], dim=-1)  # Last 10 positions
-                    greedy_tokens = self.tokenizer.decode(greedy_ids, skip_special_tokens=True)
-                    print(f"[DEBUG] Greedy prediction from last 10 logits: '{greedy_tokens}'")
-
-                    # Deep dive into the problematic tokens
-                    print(f"[DEBUG] Last 10 greedy token IDs: {greedy_ids.tolist()}")
-                    for i, token_id in enumerate(greedy_ids):
-                        token_text = self.tokenizer.decode([token_id], skip_special_tokens=False)
-                        token_text_clean = self.tokenizer.decode([token_id], skip_special_tokens=True)
-                        print(f"[DEBUG] Token {i}: ID={token_id}, no_skip='{token_text}', clean='{token_text_clean}'")
-
-                    # Check what the most likely tokens are for the last position
-                    last_logits = test_outputs.logits[0, -1, :]
-                    top_10_ids = torch.topk(last_logits, 10).indices.tolist()
-                    print(f"[DEBUG] Top 10 most likely tokens at last position:")
-                    for i, token_id in enumerate(top_10_ids):
-                        token_text = self.tokenizer.decode([token_id], skip_special_tokens=True)
-                        print(f"[DEBUG]   {i}: ID={token_id} -> '{token_text}'")
-
-                    # Check if we have the same token repeated
-                    unique_tokens = torch.unique(greedy_ids)
-                    print(f"[DEBUG] Unique tokens in greedy prediction: {unique_tokens.tolist()} (out of {len(greedy_ids)} tokens)")
-
-            # Generate using input_ids and mmwave_embeds
-            # Following the reference code's strategy exactly
+            # Generate using input_ids and mmwave_embeds (reference settings)
             self.model.eval()
             with torch.inference_mode():
-                # Use autocast like reference code
                 with torch.autocast('cuda', dtype=torch.bfloat16):
-                    # Create attention mask if None like reference code
                     if attention_mask_single is None:
                         attention_mask_single = torch.ones(input_ids_single.shape, dtype=torch.long, device=input_ids_single.device)
 
-                    if _is_rank_0():
-                        print(f"[DEBUG] Starting generation...")
-
-                    # Use reference code parameters exactly
                     outputs = self.model.generate(
                         input_ids_single,
                         input_wave_embeds=mmwave_embeds_single,
                         attention_mask=attention_mask_single,
-                        do_sample=True,         # Same as reference
-                        temperature=1.0,         # Same as reference
-                        top_k=50,               # Same as reference
-                        num_beams=4,            # Same as reference (beam_size=4)
-                        max_new_tokens=30,      # Same as reference
-                        top_p=0.95              # Same as reference
+                        do_sample=True,
+                        temperature=1.0,
+                        top_k=50,
+                        num_beams=4,
+                        max_new_tokens=30,
+                        top_p=0.95
                     )
-
-                    if _is_rank_0():
-                        print(f"[DEBUG] Generation completed")
-                        print(f"[DEBUG] Output shape: {outputs.shape}")
 
             # Decode response following reference code
             input_token_len = input_ids_single.shape[1]
-            n_diff_input_output = (input_ids_single != outputs[0, :input_token_len]).sum().item()
-            if n_diff_input_output > 0:
-                print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
-
             response = self.tokenizer.decode(outputs[0, input_token_len:], skip_special_tokens=True)
             responses.append(response.strip())
         
         return responses
+
+    def _print_trainable_parameters(self):
+        """Print detailed information about trainable parameters"""
+        total_params = 0
+        trainable_params = 0
+
+        breakdown = {
+            'LoRA adapters': 0,
+            'mm_projection_layers': 0,
+            'embed_tokens (new rows)': 0,
+            'Other trainable': 0,
+        }
+
+        new_token_count = getattr(self, '_new_special_token_count', 0) or 0
+        embed_token_dim = None
+
+        for name, param in self.named_parameters():
+            param_count = param.numel()
+            total_params += param_count
+
+            if not param.requires_grad:
+                continue
+
+            trainable_count = param_count
+
+            if 'embed_tokens' in name:
+                if embed_token_dim is None and param.dim() >= 2:
+                    embed_token_dim = param.shape[1]
+                if new_token_count > 0 and embed_token_dim is not None:
+                    trainable_count = new_token_count * embed_token_dim
+                else:
+                    trainable_count = 0
+            elif 'lm_head' in name:
+                trainable_count = 0  # lm_head remains frozen
+
+            if trainable_count == 0:
+                continue
+
+            trainable_params += trainable_count
+
+            if 'lora_' in name:
+                breakdown['LoRA adapters'] += trainable_count
+            elif 'mm_projection_layers' in name:
+                breakdown['mm_projection_layers'] += trainable_count
+            elif 'embed_tokens' in name:
+                breakdown['embed_tokens (new rows)'] += trainable_count
+            else:
+                breakdown['Other trainable'] += trainable_count
+
+        if _is_rank_0():
+            ratio = (trainable_params / total_params * 100) if total_params > 0 else 0.0
+            header = f"Trainable params: {trainable_params:,} / {total_params:,} ({ratio:.2f}%)"
+            print(colored("[INFO]", "green") + f" {header}")
+
+            print(colored("[INFO]", "green") + " Breakdown (trainable):")
+            for key, value in breakdown.items():
+                if value == 0:
+                    continue
+                percent = value / trainable_params * 100 if trainable_params > 0 else 0.0
+                print(colored("[INFO]", "green") + f"   - {key:<24}: {value:,} ({percent:.2f}%)")
+
+            frozen_params = total_params - trainable_params
+            print(colored("[INFO]", "green") + f" Frozen params: {frozen_params:,}")
