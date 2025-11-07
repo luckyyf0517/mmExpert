@@ -17,6 +17,7 @@ from threading import Lock
 import threading
 import time
 from abc import ABC, abstractmethod
+from src.logger import log_message
 
 T = TypeVar('T')
 
@@ -329,7 +330,7 @@ class DIContainer:
                         try:
                             instance.dispose()
                         except Exception as e:
-                            print(f"Error disposing instance: {e}")
+                            log_message("ERROR", f"Error disposing instance: {e}", color="red")
                 del self._scopes[scope_name]
 
     def get_registered_services(self) -> List[Type]:

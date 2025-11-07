@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List, Tuple
 
 import pytorch_lightning as pl
 from torchmetrics import Metric
-from termcolor import colored
+from src.logger import log_message
 
 from ..core.base import BaseModel, ModalityData, ModalityType, EncodingResult
 from ..core.config import ModelConfig
@@ -173,7 +173,7 @@ class CLIPModel(pl.LightningModule):
             
             if self.rank != actual_rank or self.world_size != actual_world_size:
                 if self.trainer and self.trainer.is_global_zero:
-                    print(colored("[WARNING] Updating distributed parameters:", 'yellow') + f" rank {self.rank}->{actual_rank}, world_size {self.world_size}->{actual_world_size}")
+                    log_message("WARNING", f"Updating distributed parameters: rank {self.rank}->{actual_rank}, world_size {self.world_size}->{actual_world_size}", color="yellow")
                 self.rank = actual_rank
                 self.world_size = actual_world_size
                 # Recreate loss function with correct parameters
@@ -187,7 +187,7 @@ class CLIPModel(pl.LightningModule):
             env_world_size = int(env_world_size)
             if self.rank != env_rank or self.world_size != env_world_size:
                 if self.trainer and self.trainer.is_global_zero:
-                    print(colored("[WARNING] Updating from env vars:", 'yellow') + f" rank {self.rank}->{env_rank}, world_size {self.world_size}->{env_world_size}")
+                    log_message("WARNING", f"Updating from env vars: rank {self.rank}->{env_rank}, world_size {self.world_size}->{env_world_size}", color="yellow")
                 self.rank = env_rank
                 self.world_size = env_world_size
                 self.criterion = self._create_loss_function()

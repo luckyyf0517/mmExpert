@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass
 
 from .base import BaseFactory, BaseConfig
+from src.logger import log_message
 
 
 T = TypeVar('T')
@@ -285,7 +286,7 @@ class ComponentRegistry:
             try:
                 hook(*args, **kwargs)
             except Exception as e:
-                print(f"Hook error for event '{event}': {e}")
+                log_message("ERROR", f"Hook error for event '{event}': {e}", color="red")
 
     def clear(self, category: str = None) -> None:
         """Clear registry entries."""

@@ -18,7 +18,7 @@ import yaml
 import argparse
 from pathlib import Path
 import glob
-from termcolor import colored
+from src.logger import log_message
 from datetime import datetime
 from tqdm import tqdm
 import pandas as pd
@@ -39,7 +39,7 @@ class CLIPGroupEvaluator:
 
         # Discover all versions
         self.versions = self.discover_versions()
-        print(colored(f"[DISCOVER] Discovered {len(self.versions)} versions in {group_dir}", 'cyan'))
+        log_message("DISCOVER", f"Discovered {len(self.versions)} versions in {group_dir}", color="cyan")
 
         # Results storage
         self.results = {}
@@ -115,9 +115,9 @@ class CLIPGroupEvaluator:
 
         try:
             if self.verbose:
-                print(colored(f"\n[EVALUATE] Evaluating version: {version_name}", 'blue'))
+                log_message("EVALUATE", f"Evaluating version: {version_name}", color="blue")
             else:
-                print(colored(f"[PROGRESS] Evaluating: {version_name}", 'yellow'), end=' ... ')
+                log_message("PROGRESS", f"Evaluating: {version_name}", color="yellow")
 
             # Find last.ckpt or fallback to other checkpoint
             checkpoints_dir = version['checkpoints_dir']
@@ -149,14 +149,10 @@ class CLIPGroupEvaluator:
             }
 
             if not self.verbose:
-                print(colored("[INFO] Done", 'green'))
+                log_message("INFO", "Done", color="green")
 
         except Exception as e:
-            error_msg = colored("[ERROR] Failed:", 'red') + f" {str(e)}"
-            if self.verbose:
-                print(error_msg)
-            else:
-                print(error_msg)
+            log_message("ERROR", f"Failed: {str(e)}", color="red")
 
             self.results[version_name] = {
                 'model_path': model_path if 'model_path' in locals() else None,
@@ -167,21 +163,21 @@ class CLIPGroupEvaluator:
 
     def evaluate_all(self):
         """Evaluate all models in the group"""
-        print(colored(f"\n[START] Starting group evaluation for {len(self.versions)} models...", 'green'))
+        log_message("START", f"Starting group evaluation for {len(self.versions)} models...", color="green")
         print("=" * 80)
 
         for version in self.versions:
             self.evaluate_single_model(version)
 
         print("\n" + "=" * 80)
-        print(colored("[INFO] Group evaluation complete!", 'green'))
+        log_message("INFO", "Group evaluation complete!", color="green")
 
     def format_results(self):
         """Format results for comparison display"""
         successful_results = {k: v for k, v in self.results.items() if v['status'] == 'success'}
 
         if not successful_results:
-            print(colored("[ERROR] No successful evaluations to display!", 'red'))
+            log_message("ERROR", "No successful evaluations to display!", color="red")
             return
 
         # Create comparison table
@@ -215,12 +211,12 @@ class CLIPGroupEvaluator:
         table_data.sort(key=lambda x: float(x[1]), reverse=True)
 
         # Display table
-        print(colored("\n[RESULTS] CLIP MODEL COMPARISON RESULTS", 'cyan'))
+        log_message("RESULTS", "CLIP MODEL COMPARISON RESULTS", color="cyan")
         print("=" * 100)
         print(tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3f"))
 
         # Summary statistics
-        print(colored("\n[STATISTICS] SUMMARY STATISTICS", 'blue'))
+        log_message("STATISTICS", "SUMMARY STATISTICS", color="blue")
         print("-" * 50)
 
         all_r2t_r1 = [data['results']['radar_to_text_recall@1'] for data in successful_results.values()]
@@ -248,14 +244,14 @@ class CLIPGroupEvaluator:
         # Find best performing model
         best_model = max(successful_results.items(),
                         key=lambda x: x[1]['results']['radar_to_text_recall@1'])
-        print(colored(f"\n[BEST] Best performing model: {best_model[0]}", 'green'))
+        log_message("BEST", f"Best performing model: {best_model[0]}", color="green")
         print(f"   Radar→Text Recall@1: {best_model[1]['results']['radar_to_text_recall@1']:.3f}")
         print(f"   Text→Radar Recall@1: {best_model[1]['results']['text_to_radar_recall@1']:.3f}")
 
         # Show failed models
         failed_models = {k: v for k, v in self.results.items() if v['status'] == 'failed'}
         if failed_models:
-            print(f"\n" + colored("[ERROR] Failed models:", 'red'))
+            log_message("ERROR", "Failed models:", color="red")
             for version_name, data in failed_models.items():
                 print(f"   {version_name}: {data['error']}")
 
@@ -275,7 +271,7 @@ class CLIPGroupEvaluator:
         with open(output_path, 'w') as f:
             json.dump(results_data, f, indent=2)
 
-        print(colored(f"\n[SAVE] Detailed results saved to: {output_path}", 'magenta'))
+        log_message("SAVE", f"Detailed results saved to: {output_path}", color="magenta")
 
 
 def main():

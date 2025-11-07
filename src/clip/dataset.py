@@ -8,7 +8,7 @@ import codecs as cs
 from tqdm import tqdm
 from copy import deepcopy
 from easydict import EasyDict as edict
-from termcolor import colored
+from src.logger import log_message
 from torch.utils.data._utils.collate import default_collate
 
 # Constants for radar data processing
@@ -130,7 +130,7 @@ def load_radar_data(npz_file_path, opt):
         }
 
     except Exception as e:
-        print(f"Error loading radar data from {npz_file_path}: {e}")
+        log_message("ERROR", f"Error loading radar data from {npz_file_path}: {e}", color="red")
         return None
 
 
@@ -152,8 +152,8 @@ class Text2DopplerDatasetV2():
     def _load_data(self, split_file, data_scale):
         """Load and scale dataset."""
         data_dict = json.load(open(split_file, 'r'))
-        data_amount = int(len(data_dict) * data_scale)  
-        print(f"Total number of data {data_amount} (scale factor: {data_scale}) from {split_file}")
+        data_amount = int(len(data_dict) * data_scale)
+        log_message("DATASET", f"Total number of data {data_amount} (scale factor: {data_scale}) from {split_file}", color="blue")
         return list(data_dict.values())[:data_amount]
 
     def _get_radar_path(self, data_dict):
@@ -262,15 +262,15 @@ if __name__ == "__main__":
         dataset = Text2DopplerDatasetV2(opt, dataset_file, data_scale=0.01)  # Use small subset
         if len(dataset) > 0:
             item = dataset[0]  # Get first item
-            print("Dataset item content:")
+            log_message("DATASET", "Dataset item content:", color="green")
             for key, value in item.items():
                 if isinstance(value, np.ndarray):
-                    print(f"{key}: shape={value.shape}")
+                    log_message("DATASET", f"{key}: shape={value.shape}", color="green")
                     if value.size < 20:  # Only print small arrays
-                        print(f"  data: {value}")
+                        log_message("DATASET", f"  data: {value}", color="green")
                 else:
-                    print(f"{key}: {value}")
+                    log_message("DATASET", f"{key}: {value}", color="green")
         else:
-            print("Dataset is empty")
+            log_message("DATASET", "Dataset is empty", color="yellow")
     else:
-        print(f"Dataset file not found: {dataset_file}")
+        log_message("DATASET", f"Dataset file not found: {dataset_file}", color="red")

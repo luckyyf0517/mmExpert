@@ -4,7 +4,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 import yaml
 import glob
 import shutil
-from termcolor import colored
+from src.logger import log_message
 import random
 import argparse
 import logging
@@ -94,79 +94,79 @@ if __name__ == '__main__':
 
     # Dry run mode handling
     if args.dry_run:
-        print(colored("[DRY RUN] DRY RUN MODE - Configuration Validation", 'cyan'))
+        log_message("DRY RUN", "DRY RUN MODE - Configuration Validation", color="cyan")
         print("=" * 50)
-        print(colored(f"[CONFIG] Model Config: {args.model_config}", 'blue'))
-        print(colored(f"[CONFIG] Data Config: {args.data_config}", 'blue'))
-        print(colored(f"[CONFIG] Strategy: {args.strategy}", 'blue'))
-        print(colored(f"[CONFIG] Seed: {args.seed}", 'blue'))
+        log_message("CONFIG", f"Model Config: {args.model_config}", color="blue")
+        log_message("CONFIG", f"Data Config: {args.data_config}", color="blue")
+        log_message("CONFIG", f"Strategy: {args.strategy}", color="blue")
+        log_message("CONFIG", f"Seed: {args.seed}", color="blue")
         print("=" * 50)
 
         # Validate configs without logging
         try:
             # Validate model config
             model_cfg = cfg.model_cfg
-            print("Model configuration loaded successfully")
-            print(f"   - Model type: {model_cfg.target}")
-            print(f"   - Max epochs: {model_cfg.params.max_epochs}")
-            print(f"   - Learning rate: {model_cfg.params.learning_rate}")
-            print(f"   - Temperature: {model_cfg.params.temperature}")
+            log_message("INFO", "Model configuration loaded successfully", color="green")
+            log_message("INFO", f"   - Model type: {model_cfg.target}", color="green")
+            log_message("INFO", f"   - Max epochs: {model_cfg.params.max_epochs}", color="green")
+            log_message("INFO", f"   - Learning rate: {model_cfg.params.learning_rate}", color="green")
+            log_message("INFO", f"   - Temperature: {model_cfg.params.temperature}", color="green")
 
             # Validate data config
             data_cfg = cfg.data_cfg
-            print("Data configuration loaded successfully")
-            print(f"   - Dataset: {data_cfg.target}")
-            print(f"   - Batch size: {data_cfg.params.cfg.batch_size}")
+            log_message("INFO", "Data configuration loaded successfully", color="green")
+            log_message("INFO", f"   - Dataset: {data_cfg.target}", color="green")
+            log_message("INFO", f"   - Batch size: {data_cfg.params.cfg.batch_size}", color="green")
 
             # Test model instantiation (minimal)
-            print("Testing model instantiation...")
+            log_message("INFO", "Testing model instantiation...", color="green")
             model = instantiate_from_config(model_cfg)
-            print(f"   - Model instantiated: {type(model).__name__}")
+            log_message("INFO", f"   - Model instantiated: {type(model).__name__}", color="green")
 
             # Test data loading (minimal)
-            print("Testing data loading...")
+            log_message("INFO", "Testing data loading...", color="green")
             data = instantiate_from_config(data_cfg)
-            print(f"   - Data module instantiated: {type(data).__name__}")
+            log_message("INFO", f"   - Data module instantiated: {type(data).__name__}", color="green")
 
             # Test forward pass with minimal data
-            print("Testing forward pass...")
+            log_message("INFO", "Testing forward pass...", color="green")
             data.setup('fit')
 
             # Get single batch for testing
             train_loader = data.train_dataloader()
             val_loader = data.val_dataloader()
 
-            print("   - Loading single batch from train loader...")
+            log_message("INFO", "   - Loading single batch from train loader...", color="green")
             train_batch = next(iter(train_loader))
             train_shapes = {k: (v.shape if hasattr(v, 'shape') else str(type(v))) for k, v in train_batch.items()}
-            print(f"   - Train batch shapes: {train_shapes}")
+            log_message("INFO", f"   - Train batch shapes: {train_shapes}", color="green")
 
-            print("   - Loading single batch from val loader...")
+            log_message("INFO", "   - Loading single batch from val loader...", color="green")
             val_batch = next(iter(val_loader))
             val_shapes = {k: (v.shape if hasattr(v, 'shape') else str(type(v))) for k, v in val_batch.items()}
-            print(f"   - Val batch shapes: {val_shapes}")
+            log_message("INFO", f"   - Val batch shapes: {val_shapes}", color="green")
 
             # Test model forward pass
-            print("   - Running model forward pass...")
+            log_message("INFO", "   - Running model forward pass...", color="green")
             with torch.no_grad():
                 # Dummy step for validation
                 dummy_logits = model(train_batch)
                 if hasattr(dummy_logits, 'loss'):
-                    print(f"   - Model output (loss): {dummy_logits.loss:.6f}")
+                    log_message("INFO", f"   - Model output (loss): {dummy_logits.loss:.6f}", color="green")
                 else:
                     output_shapes = {k: (v.shape if hasattr(v, 'shape') else str(type(v))) for k, v in dummy_logits.items() if hasattr(v, 'shape')}
-                    print(f"   - Model output shape: {output_shapes}")
+                    log_message("INFO", f"   - Model output shape: {output_shapes}", color="green")
 
-            print(colored("\n[SUCCESS] DRY RUN SUCCESSFUL - Configuration is valid!", 'green'))
-            print(colored("[INFO] Use this command to start full training:", 'cyan'))
-            print(colored(f"   python run_clip.py --model-config {args.model_config} --data-config {args.data_config}", 'white'))
+            log_message("SUCCESS", "\nDRY RUN SUCCESSFUL - Configuration is valid!", color="green")
+            log_message("INFO", "Use this command to start full training:", color="cyan")
+            log_message("INFO", f"   python run_clip.py --model-config {args.model_config} --data-config {args.data_config}", color="white")
 
         except Exception as e:
-            print(colored(f"\n[ERROR] DRY RUN FAILED - Configuration error detected!", 'red'))
-            print(colored(f"[ERROR] Error: {str(e)}", 'red'))
-            print(colored("\n[INFO] Please check your configuration files:", 'yellow'))
-            print(colored(f"   - Model config: {args.model_config}", 'white'))
-            print(colored(f"   - Data config: {args.data_config}", 'white'))
+            log_message("ERROR", f"\nDRY RUN FAILED - Configuration error detected!", color="red")
+            log_message("ERROR", f"Error: {str(e)}", color="red")
+            log_message("INFO", "\nPlease check your configuration files:", color="yellow")
+            log_message("INFO", f"   - Model config: {args.model_config}", color="white")
+            log_message("INFO", f"   - Data config: {args.data_config}", color="white")
 
         exit()
 

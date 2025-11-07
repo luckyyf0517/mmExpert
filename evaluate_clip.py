@@ -20,7 +20,7 @@ import argparse
 from pathlib import Path
 import yaml
 import glob
-from termcolor import colored
+from src.logger import log_message
 
 # Add project root to path
 sys.path.append('/root/autodl-tmp/mmExpert')
@@ -63,7 +63,7 @@ class CLIPEvaluator:
 
     def discover_from_version(self, version_path):
         """Discover model and config paths from version directory"""
-        print(colored(f"[DISCOVER] Discovering files from version path: {version_path}", 'cyan'))
+        log_message("DISCOVER", f"Discovering files from version path: {version_path}", color="cyan")
 
         # Resolve version path - could be experiment name or full path
         if not os.path.isabs(version_path) and '/' not in version_path:
@@ -85,7 +85,7 @@ class CLIPEvaluator:
         last_ckpt = os.path.join(checkpoints_dir, 'last.ckpt')
         if os.path.exists(last_ckpt):
             model_path = last_ckpt
-            print(colored(f"[SUCCESS] Found last checkpoint: {model_path}", 'green'))
+            log_message("SUCCESS", f"Found last checkpoint: {model_path}", color="green")
         else:
             # Find any checkpoint file
             ckpt_files = [f for f in os.listdir(checkpoints_dir) if f.endswith('.ckpt')]
@@ -95,7 +95,7 @@ class CLIPEvaluator:
             # Sort by epoch number if possible, otherwise use the first one
             ckpt_files.sort()
             model_path = os.path.join(checkpoints_dir, ckpt_files[-1])
-            print(colored(f"[SUCCESS] Found checkpoint: {model_path}", 'green'))
+            log_message("SUCCESS", f"Found checkpoint: {model_path}", color="green")
 
         # Check for config directory in multiple locations
         version_name = os.path.basename(version_path)
@@ -103,19 +103,19 @@ class CLIPEvaluator:
         # Priority 1: config directory inside version (new format)
         config_dir = os.path.join(version_path, 'config')
         if os.path.exists(config_dir) and os.path.isdir(config_dir):
-            print(colored(f"[SUCCESS] Found config directory in version: {config_dir}", 'green'))
+            log_message("SUCCESS", f"Found config directory in version: {config_dir}", color="green")
             return model_path, config_dir
 
         # Priority 2: config/version_name (old format)
         config_dir = os.path.join('config', version_name)
         if os.path.exists(config_dir) and os.path.isdir(config_dir):
-            print(colored(f"[SUCCESS] Found config directory in config/: {config_dir}", 'green'))
+            log_message("SUCCESS", f"Found config directory in config/: {config_dir}", color="green")
             return model_path, config_dir
 
         # Priority 3: Check for model_config.yaml directly in version directory
         model_config_in_version = os.path.join(version_path, 'model_config.yaml')
         if os.path.exists(model_config_in_version):
-            print(colored(f"[SUCCESS] Found model_config.yaml in version directory: {version_path}", 'green'))
+            log_message("SUCCESS", f"Found model_config.yaml in version directory: {version_path}", color="green")
             return model_path, version_path
 
         raise FileNotFoundError(f"Config directory not found in any expected location for version: {version_name}")
@@ -141,10 +141,10 @@ class CLIPEvaluator:
 
         # Verify version directory exists
         if os.path.exists(version_dir) and os.path.isdir(version_dir):
-            print(colored(f"[SUCCESS] Discovered version directory from model path: {version_dir}", 'green'))
+            log_message("SUCCESS", f"Discovered version directory from model path: {version_dir}", color="green")
             return os.path.abspath(version_dir)
         else:
-            print(colored(f"[WARNING] Could not determine version directory from model path, using model directory: {model_dir}", 'yellow'))
+            log_message("WARNING", f"Could not determine version directory from model path, using model directory: {model_dir}", color="yellow")
             return os.path.abspath(model_dir)
 
     def discover_config_path(self):
@@ -152,7 +152,7 @@ class CLIPEvaluator:
         # If we have a config_dir from version discovery, use it
         if hasattr(self, 'config_dir') and self.config_dir is not None:
             config_dir = self.config_dir
-            print(colored(f"[SUCCESS] Using pre-discovered config directory: {config_dir}", 'green'))
+            log_message("SUCCESS", f"Using pre-discovered config directory: {config_dir}", color="green")
         else:
             # Fall back to auto-discovery based on checkpoint location
             model_dir = os.path.dirname(self.model_path)
@@ -220,13 +220,13 @@ class CLIPEvaluator:
         if has_model_config and has_data_config:
             return self.merge_configs(model_config, data_config)
         elif has_single_config:
-            print(colored(f"[CONFIG] Auto-discovered config: {single_config}", 'blue'))
+            log_message("CONFIG", f"Auto-discovered config: {single_config}", color="blue")
             return single_config
         elif has_model_config:
-            print(colored(f"[CONFIG] Auto-discovered model config: {model_config}", 'blue'))
+            log_message("CONFIG", f"Auto-discovered model config: {model_config}", color="blue")
             return model_config
         else:  # has_data_config only
-            print(colored(f"[CONFIG] Auto-discovered data config: {data_config}", 'blue'))
+            log_message("CONFIG", f"Auto-discovered data config: {data_config}", color="blue")
             return data_config
 
     def merge_configs(self, model_config_path, data_config_path):
@@ -251,16 +251,16 @@ class CLIPEvaluator:
         yaml.dump(merged_config, temp_file, default_flow_style=False)
         temp_file.close()
 
-        print(colored(f"[CONFIG] Auto-discovered and merged configs:", 'blue'))
-        print(colored(f"  Model config: {model_config_path}", 'white'))
-        print(colored(f"  Data config: {data_config_path}", 'white'))
-        print(colored(f"  Merged config: {temp_file.name}", 'white'))
+        log_message("CONFIG", "Auto-discovered and merged configs:", color="blue")
+        log_message("CONFIG", f"  Model config: {model_config_path}", color="white")
+        log_message("CONFIG", f"  Data config: {data_config_path}", color="white")
+        log_message("CONFIG", f"  Merged config: {temp_file.name}", color="white")
 
         return temp_file.name
 
     def load_model(self):
         """Load trained CLIP model"""
-        print(colored(f"[LOAD] Loading model from {self.model_path}", 'cyan'))
+        log_message("LOAD", f"Loading model from {self.model_path}", color="cyan")
 
         # Load config using YAML loader
         config = load_config(self.config_path)
@@ -277,12 +277,12 @@ class CLIPEvaluator:
         else:
             model.load_state_dict(checkpoint)
 
-        print(f"Model loaded successfully")
+        log_message("INFO", "Model loaded successfully", color="green")
         return model
 
     def load_test_data(self):
         """Load test dataset"""
-        print("Loading test dataset...")
+        log_message("INFO", "Loading test dataset...", color="green")
 
         # Load config using YAML loader
         config = load_config(self.config_path)
@@ -293,20 +293,20 @@ class CLIPEvaluator:
         if self.override_batch_size is not None:
             original_batch_size = data_cfg['params']['cfg']['batch_size']
             data_cfg['params']['cfg']['batch_size'] = self.override_batch_size
-            print(f"Overriding batch size: {original_batch_size} → {self.override_batch_size}")
+            log_message("INFO", f"Overriding batch size: {original_batch_size} → {self.override_batch_size}", color="green")
 
         data_interface = HumanDInterface(data_cfg['params']['cfg'])
         data_interface.setup('test')
 
         test_dataloader = data_interface.test_dataloader()
-        print(f"Test dataset loaded: {len(test_dataloader.dataset)} samples")
-        print(f"Using batch size: {test_dataloader.batch_size}")
+        log_message("INFO", f"Test dataset loaded: {len(test_dataloader.dataset)} samples", color="green")
+        log_message("INFO", f"Using batch size: {test_dataloader.batch_size}", color="green")
 
         return test_dataloader
 
     def extract_features(self):
         """Extract features from test dataset (batch-wise evaluation)"""
-        print("Extracting features and evaluating batch-wise...")
+        log_message("INFO", "Extracting features and evaluating batch-wise...", color="green")
 
         batch_size = self.test_dataloader.batch_size
         all_batch_results = []
@@ -354,10 +354,10 @@ class CLIPEvaluator:
         # Aggregate results across all batches
         aggregated_results = self.aggregate_batch_results(all_batch_results)
 
-        print(f"Batch-wise evaluation completed:")
-        print(f"  Total batches: {len(all_batch_results)}")
-        print(f"  Batch size: {batch_size}")
-        print(f"  Total samples evaluated: {len(all_captions)}")
+        log_message("INFO", "Batch-wise evaluation completed:", color="green")
+        log_message("INFO", f"  Total batches: {len(all_batch_results)}", color="green")
+        log_message("INFO", f"  Batch size: {batch_size}", color="green")
+        log_message("INFO", f"  Total samples evaluated: {len(all_captions)}", color="green")
 
         return aggregated_results, all_captions
 
@@ -381,9 +381,9 @@ class CLIPEvaluator:
 
         # Debug output for this batch
         if self.debug and captions is not None:
-            print(f"\n" + "="*80)
-            print(colored(f"[DEBUG] DEBUG - Batch {batch_idx} (Size: {batch_size})", 'yellow'))
-            print(colored("="*80, 'white'))
+            log_message("DEBUG", f"\n{'='*80}", color="yellow")
+            log_message("DEBUG", f"DEBUG - Batch {batch_idx} (Size: {batch_size})", color="yellow")
+            log_message("DEBUG", f"{'='*80}", color="white")
 
         # Evaluate Radar→Text retrieval
         for i in range(batch_size):
@@ -401,20 +401,20 @@ class CLIPEvaluator:
                 predicted_caption = captions[predicted_idx]
                 similarity_score = similarity_matrix[i, predicted_idx].item()
 
-                print(colored(f"\n[SAMPLE] Sample {i:2d}:", 'cyan'))
-                print(colored(f"   [CORRECT] Correct Caption: {correct_caption}", 'green'))
-                print(colored(f"   [PREDICTED] Predicted Caption: {predicted_caption}", 'blue'))
-                print(colored(f"   [SCORE] Similarity Score: {similarity_score:.4f}", 'magenta'))
-                print(colored(f"   [RANK] Rank of Correct: {rank}", 'yellow'))
+                log_message("SAMPLE", f"\nSample {i:2d}:", color="cyan")
+                log_message("CORRECT", f"   Correct Caption: {correct_caption}", color="green")
+                log_message("PREDICTED", f"   Predicted Caption: {predicted_caption}", color="blue")
+                log_message("SCORE", f"   Similarity Score: {similarity_score:.4f}", color="magenta")
+                log_message("RANK", f"   Rank of Correct: {rank}", color="yellow")
 
                 # Show top 3 predictions
-                print(colored(f"   [TOP3] Top 3 Predictions:", 'cyan'))
+                log_message("TOP3", f"   Top 3 Predictions:", color="cyan")
                 for j in range(min(3, batch_size)):
                     pred_idx = sorted_indices[j].item()
                     pred_caption = captions[pred_idx]
                     pred_score = similarity_matrix[i, pred_idx].item()
                     is_correct = "CORRECT" if pred_idx == i else "WRONG"
-                    print(f"      {j+1}. {is_correct} [{pred_score:.4f}] {pred_caption}")
+                    log_message("TOP3", f"      {j+1}. {is_correct} [{pred_score:.4f}] {pred_caption}", color="cyan")
 
         # Evaluate Text→Radar retrieval
         for i in range(batch_size):
@@ -487,7 +487,7 @@ class CLIPEvaluator:
 
     def analyze_similarity_distribution(self, similarity_matrix):
         """Analyze similarity score distribution"""
-        print("\n5. Similarity Score Distribution:")
+        log_message("INFO", "\n5. Similarity Score Distribution:", color="green")
 
         # Get diagonal (correct pairs) and off-diagonal (incorrect pairs)
         diagonal_scores = torch.diag(similarity_matrix).cpu().numpy()
@@ -504,37 +504,37 @@ class CLIPEvaluator:
 
         off_diagonal_scores = np.array(off_diagonal_scores)
 
-        print(f"  Correct pairs (diagonal):")
-        print(f"    Mean: {np.mean(diagonal_scores):.4f}")
-        print(f"    Std:  {np.std(diagonal_scores):.4f}")
-        print(f"    Min:  {np.min(diagonal_scores):.4f}")
-        print(f"    Max:  {np.max(diagonal_scores):.4f}")
+        log_message("INFO", "  Correct pairs (diagonal):", color="green")
+        log_message("INFO", f"    Mean: {np.mean(diagonal_scores):.4f}", color="green")
+        log_message("INFO", f"    Std:  {np.std(diagonal_scores):.4f}", color="green")
+        log_message("INFO", f"    Min:  {np.min(diagonal_scores):.4f}", color="green")
+        log_message("INFO", f"    Max:  {np.max(diagonal_scores):.4f}", color="green")
 
-        print(f"  Incorrect pairs (off-diagonal):")
-        print(f"    Mean: {np.mean(off_diagonal_scores):.4f}")
-        print(f"    Std:  {np.std(off_diagonal_scores):.4f}")
-        print(f"    Min:  {np.min(off_diagonal_scores):.4f}")
-        print(f"    Max:  {np.max(off_diagonal_scores):.4f}")
+        log_message("INFO", "  Incorrect pairs (off-diagonal):", color="green")
+        log_message("INFO", f"    Mean: {np.mean(off_diagonal_scores):.4f}", color="green")
+        log_message("INFO", f"    Std:  {np.std(off_diagonal_scores):.4f}", color="green")
+        log_message("INFO", f"    Min:  {np.min(off_diagonal_scores):.4f}", color="green")
+        log_message("INFO", f"    Max:  {np.max(off_diagonal_scores):.4f}", color="green")
 
         # Separation metric
         separation = np.mean(diagonal_scores) - np.mean(off_diagonal_scores)
-        print(f"  Separation (correct - incorrect): {separation:.4f}")
+        log_message("INFO", f"  Separation (correct - incorrect): {separation:.4f}", color="green")
 
     def evaluate_classification_accuracy(self, similarity_matrix):
         """Evaluate classification accuracy (1-to-1 matching)"""
-        print("\n6. Classification Accuracy:")
+        log_message("INFO", "\n6. Classification Accuracy:", color="green")
 
         # For each radar sample, find the most similar text
         _, predicted_text_indices = torch.max(similarity_matrix, dim=1)
         correct_indices = torch.arange(len(similarity_matrix), device=self.device)
 
         accuracy = (predicted_text_indices == correct_indices).float().mean().item()
-        print(f"  Radar→Text Classification Accuracy: {accuracy:.4f}")
+        log_message("INFO", f"  Radar→Text Classification Accuracy: {accuracy:.4f}", color="green")
 
         # For each text sample, find the most similar radar
         _, predicted_radar_indices = torch.max(similarity_matrix.T, dim=1)
         accuracy_reverse = (predicted_radar_indices == correct_indices).float().mean().item()
-        print(f"  Text→Radar Classification Accuracy: {accuracy_reverse:.4f}")
+        log_message("INFO", f"  Text→Radar Classification Accuracy: {accuracy_reverse:.4f}", color="green")
 
         return accuracy, accuracy_reverse
 
@@ -550,41 +550,41 @@ class CLIPEvaluator:
         with open(output_path, 'w') as f:
             json.dump(results_data, f, indent=2)
 
-        print(f"\nResults saved to: {output_path}")
+        log_message("INFO", f"\nResults saved to: {output_path}", color="green")
 
     def run_evaluation(self, output_path=None):
         """Run complete evaluation with batch-wise negative sampling"""
-        print("=" * 60)
-        print("CLIP Model Evaluation (Batch-wise)")
-        print("=" * 60)
-        print(f"Batch Size: {self.test_dataloader.batch_size}")
-        print(f"Evaluation Mode: {'DEBUG - Detailed Output' if self.debug else 'Standard - Summary Only'}")
+        log_message("INFO", "=" * 60, color="green")
+        log_message("INFO", "CLIP Model Evaluation (Batch-wise)", color="green")
+        log_message("INFO", "=" * 60, color="green")
+        log_message("INFO", f"Batch Size: {self.test_dataloader.batch_size}", color="green")
+        log_message("INFO", f"Evaluation Mode: {'DEBUG - Detailed Output' if self.debug else 'Standard - Summary Only'}", color="green")
 
         # Extract features and evaluate batch-wise
         results, captions = self.extract_features()
 
         # Print batch-wise evaluation results
-        print(colored(f"\n[RESULTS] Batch-wise Evaluation Results (Batch Size: {self.test_dataloader.batch_size}):", 'blue'))
-        print(f"  Radar → Text:")
-        print(f"    Recall@1:  {results['radar_to_text_recall@1']:.4f}")
-        print(f"    Recall@5:  {results['radar_to_text_recall@5']:.4f}")
-        print(f"    Recall@10: {results['radar_to_text_recall@10']:.4f}")
-        print(f"    MRR:        {results['radar_to_text_mrr']:.4f}")
-        print(f"    Median Rank: {results['radar_to_text_median_rank']:.1f}")
+        log_message("RESULTS", f"\nBatch-wise Evaluation Results (Batch Size: {self.test_dataloader.batch_size}):", color="blue")
+        log_message("RESULTS", "  Radar → Text:", color="blue")
+        log_message("RESULTS", f"    Recall@1:  {results['radar_to_text_recall@1']:.4f}", color="blue")
+        log_message("RESULTS", f"    Recall@5:  {results['radar_to_text_recall@5']:.4f}", color="blue")
+        log_message("RESULTS", f"    Recall@10: {results['radar_to_text_recall@10']:.4f}", color="blue")
+        log_message("RESULTS", f"    MRR:        {results['radar_to_text_mrr']:.4f}", color="blue")
+        log_message("RESULTS", f"    Median Rank: {results['radar_to_text_median_rank']:.1f}", color="blue")
 
-        print(f"  Text → Radar:")
-        print(f"    Recall@1:  {results['text_to_radar_recall@1']:.4f}")
-        print(f"    Recall@5:  {results['text_to_radar_recall@5']:.4f}")
-        print(f"    Recall@10: {results['text_to_radar_recall@10']:.4f}")
-        print(f"    MRR:        {results['text_to_radar_mrr']:.4f}")
-        print(f"    Median Rank: {results['text_to_radar_median_rank']:.1f}")
+        log_message("RESULTS", "  Text → Radar:", color="blue")
+        log_message("RESULTS", f"    Recall@1:  {results['text_to_radar_recall@1']:.4f}", color="blue")
+        log_message("RESULTS", f"    Recall@5:  {results['text_to_radar_recall@5']:.4f}", color="blue")
+        log_message("RESULTS", f"    Recall@10: {results['text_to_radar_recall@10']:.4f}", color="blue")
+        log_message("RESULTS", f"    MRR:        {results['text_to_radar_mrr']:.4f}", color="blue")
+        log_message("RESULTS", f"    Median Rank: {results['text_to_radar_median_rank']:.1f}", color="blue")
 
-        print(colored(f"\n[ANALYSIS] Similarity Analysis:", 'magenta'))
-        print(f"  Correct pairs (diagonal):")
-        print(f"    Mean: {results['diag_similarity_mean']:.4f} ± {results['diag_similarity_std']:.4f}")
-        print(f"  Incorrect pairs (off-diagonal):")
-        print(f"    Mean: {results['off_diag_similarity_mean']:.4f} ± {results['off_diag_similarity_std']:.4f}")
-        print(f"  Separation: {results['separation']:.4f}")
+        log_message("ANALYSIS", "\nSimilarity Analysis:", color="magenta")
+        log_message("ANALYSIS", "  Correct pairs (diagonal):", color="magenta")
+        log_message("ANALYSIS", f"    Mean: {results['diag_similarity_mean']:.4f} ± {results['diag_similarity_std']:.4f}", color="magenta")
+        log_message("ANALYSIS", "  Incorrect pairs (off-diagonal):", color="magenta")
+        log_message("ANALYSIS", f"    Mean: {results['off_diag_similarity_mean']:.4f} ± {results['off_diag_similarity_std']:.4f}", color="magenta")
+        log_message("ANALYSIS", f"  Separation: {results['separation']:.4f}", color="magenta")
 
         # Add classification accuracy
         results['radar_to_text_accuracy'] = results['radar_to_text_recall@1']
@@ -594,9 +594,9 @@ class CLIPEvaluator:
         if output_path:
             self.save_results(results, output_path)
 
-        print("\n" + "=" * 60)
-        print("Batch-wise Evaluation Complete!")
-        print("=" * 60)
+        log_message("INFO", "\n" + "=" * 60, color="green")
+        log_message("INFO", "Batch-wise Evaluation Complete!", color="green")
+        log_message("INFO", "=" * 60, color="green")
 
         return results
 
@@ -639,7 +639,7 @@ def main():
         if evaluator.version_dir is not None:
             # Use version directory if it can be discovered (from --version or --model_path)
             output_path = os.path.join(evaluator.version_dir, 'results.json')
-            print(colored(f"[PATH] Auto-setting output path to: {output_path}", 'cyan'))
+            log_message("PATH", f"Auto-setting output path to: {output_path}", color="cyan")
         else:
             # Default fallback
             output_path = 'tmp/clip_evaluation_results.json'
@@ -650,10 +650,10 @@ def main():
     results = evaluator.run_evaluation(output_path=output_path)
 
     if not args.debug:  # Only show summary if not in debug mode (debug shows detailed info)
-        print(colored(f"\n[SUMMARY] Final Results Summary:", 'green'))
+        log_message("SUMMARY", "\nFinal Results Summary:", color="green")
         for key, value in results.items():
             if isinstance(value, float):
-                print(f"  {key}: {value:.4f}")
+                log_message("SUMMARY", f"  {key}: {value:.4f}", color="green")
 
 
 if __name__ == "__main__":

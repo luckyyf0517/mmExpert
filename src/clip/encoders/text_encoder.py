@@ -14,6 +14,7 @@ from ..core.base import BaseEncoder, ModalityData, ModalityType, EncodingResult
 from ..core.config import EncoderConfig
 from ..core.registry import register_encoder
 from ..core.factory import auto_factory
+from src.logger import log_message
 
 
 @register_encoder(
@@ -154,7 +155,7 @@ class TextEncoder(BaseEncoder):
                     param.requires_grad = False
                     frozen_count += 1
             
-            print(f"TextEncoder: Froze {frozen_count} parameters matching pattern '{pattern}'")
+            log_message("TEXT_ENCODER", f"Froze {frozen_count} parameters matching pattern '{pattern}'", color="blue")
             return
         
         # Strategy 2: Unfreeze last N layers (most intuitive)
@@ -179,10 +180,9 @@ class TextEncoder(BaseEncoder):
                         unfrozen_count += 1
                         frozen_count -= 1
                 
-                print(f"TextEncoder: Unfroze last {layers_to_unfreeze}/{total_layers} layers ({unfrozen_count} parameters), "
-                      f"froze {frozen_count} parameters")
+                log_message("TEXT_ENCODER", f"Unfroze last {layers_to_unfreeze}/{total_layers} layers ({unfrozen_count} parameters), froze {frozen_count} parameters", color="blue")
             else:
-                print(f"TextEncoder: Warning - could not find encoder.layer structure, froze all {frozen_count} parameters")
+                log_message("TEXT_ENCODER", f"Warning - could not find encoder.layer structure, froze all {frozen_count} parameters", color="yellow")
             return
         
         # Strategy 3: Freeze first N layers
@@ -194,7 +194,7 @@ class TextEncoder(BaseEncoder):
                 for param in self.backbone.parameters():
                     param.requires_grad = False
                     frozen_count += 1
-                print(f"TextEncoder: Froze all {frozen_count} parameters")
+                log_message("TEXT_ENCODER", f"Froze all {frozen_count} parameters", color="blue")
                 return
             
             # Freeze first N layers
@@ -215,9 +215,9 @@ class TextEncoder(BaseEncoder):
                             param.requires_grad = False
                             frozen_count += 1
                     
-                    print(f"TextEncoder: Froze embeddings + first {layers_to_freeze}/{total_layers} layers ({frozen_count} parameters)")
+                    log_message("TEXT_ENCODER", f"Froze embeddings + first {layers_to_freeze}/{total_layers} layers ({frozen_count} parameters)", color="blue")
                 else:
-                    print(f"TextEncoder: Warning - could not find encoder.layer structure, froze {frozen_count} parameters")
+                    log_message("TEXT_ENCODER", f"Warning - could not find encoder.layer structure, froze {frozen_count} parameters", color="yellow")
                 return
         
         # Strategy 3: Simple all-or-nothing freezing (lowest priority)
@@ -226,13 +226,13 @@ class TextEncoder(BaseEncoder):
             for param in self.backbone.parameters():
                 param.requires_grad = False
                 frozen_count += 1
-            print(f"TextEncoder: Froze all backbone parameters ({frozen_count} total)")
+            log_message("TEXT_ENCODER", f"Froze all backbone parameters ({frozen_count} total)", color="blue")
             return
         
         # No freezing
         total_params = sum(1 for _ in self.backbone.parameters())
         trainable_params = sum(1 for p in self.backbone.parameters() if p.requires_grad)
-        print(f"TextEncoder: All {trainable_params}/{total_params} backbone parameters are trainable")
+        log_message("TEXT_ENCODER", f"All {trainable_params}/{total_params} backbone parameters are trainable", color="green")
 
     def encode(self,
                data: ModalityData,
