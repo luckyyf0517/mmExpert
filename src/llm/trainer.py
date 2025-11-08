@@ -316,7 +316,7 @@ class WaveLLMTrainer(pl.LightningModule):
         if self.debug_mode and _is_rank_0():
             try:
                 question = batch['questions'][0]    
-                answer = batch['questions'][0]
+                answer = batch['answers'][0]
                 prediction = predict_text_from_logits(self.tokenizer, outputs.logits, labels)
                 log_sample_output(question, prediction, answer, prefix="FORWARD")
             except Exception as exc:

@@ -24,4 +24,5 @@ python debug_llm.py \
     --config config/llm/phi3.yaml \
     --data_root ${DATA_ROOT} \
     --max_batches ${MAX_STEPS} \
+    --split train \
     --batch_size ${BATCH_SIZE} 

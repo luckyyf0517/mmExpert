@@ -2,11 +2,13 @@ import os
 import json
 from glob import glob
 
+SPLIT = 'test'
+
 def combine_qa_files():
     """Combine all JSON files in train_QAs directory into one file."""
     
     # Get all part files
-    qa_dir = "dataset/HumanML3D/_split/train_QAs"
+    qa_dir = f"dataset/HumanML3D/_split/{SPLIT}_QAs"
     pattern = os.path.join(qa_dir, "part_*.json")
     part_files = sorted(glob(pattern))
     
@@ -28,7 +30,7 @@ def combine_qa_files():
             combined_data.update(data)
     
     # Save combined file with same name as folder
-    output_file = os.path.join(qa_dir, "train_QAs.json")
+    output_file = os.path.join(qa_dir, f"{SPLIT}_QAs.json")
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(combined_data, f, indent=2, ensure_ascii=False)
     

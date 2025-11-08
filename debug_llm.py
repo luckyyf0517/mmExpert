@@ -87,6 +87,8 @@ def main():
                         help="Use train mode (with dropout) instead of eval mode")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
+    parser.add_argument("--split", type=str, default=None,
+                        help="Dataset split to use (overrides config file)")
     
     args = parser.parse_args()
     
@@ -120,10 +122,14 @@ def main():
     cfg_yaml.data_cfg.data_root = args.data_root
     cfg_yaml.model_cfg.encoder_path = args.data_root
     cfg_yaml.data_cfg.batch_size = args.batch_size
+    
+    # Override config with command line arguments
+    if args.split is not None:
+        cfg_yaml.data_cfg.test_split = args.split
 
     data_module = WaveLLMDataModule(cfg_yaml.data_cfg)
-    data_module.setup(stage='fit')
-    dataloader = data_module.train_dataloader()
+    data_module.setup(stage='test')
+    dataloader = data_module.test_dataloader()
     
     # Test on training data with bf16-mixed (same as training)
     print(colored("[INFO]", "green") + " Using bf16-mixed precision (matching training)")

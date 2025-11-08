@@ -384,7 +384,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=self.num_workers,
             collate_fn=self._collate_fn,
             pin_memory=True

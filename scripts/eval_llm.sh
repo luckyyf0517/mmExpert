@@ -22,4 +22,5 @@ python evaluate_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
     --config config/llm/phi3.yaml \
     --data_root ${DATA_ROOT} \
-    --batch_size 1 
+    --split test \
+    --batch_size 4 
