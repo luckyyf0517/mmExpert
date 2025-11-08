@@ -3,6 +3,7 @@ import torch.nn as nn
 from transformers import Phi3Model as _Phi3Model, Phi3ForCausalLM as _Phi3ForCausalLM
 from typing import List, Optional, Union, Tuple
 from .base_model import WaveBaseModel
+from termcolor import colored
 
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
@@ -45,18 +46,15 @@ class Phi3Model(WaveBaseModel, _Phi3Model):
                     attention_mask=attention_mask
                 )
         
-        # Call parent Phi3Model.forward with input_ids=None (like old version)
         return super(Phi3Model, self).forward(
             input_ids=None,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            cache_position=cache_position,
             **kwargs
         )
 
@@ -139,6 +137,13 @@ class Phi3ForCausalLM(WaveBaseModel, _Phi3ForCausalLM):
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         """Forward matching old version's WaveLLMForCausalLM"""
         
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        position_ids = None
+        
         # Call self.model (custom Phi3Model) which handles wave fusion
         outputs = self.model(
             input_ids=input_ids,
@@ -150,7 +155,7 @@ class Phi3ForCausalLM(WaveBaseModel, _Phi3ForCausalLM):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            **kwargs
+            position_ids=position_ids, 
         )
         
         hidden_states = outputs[0]
@@ -179,33 +184,4 @@ class Phi3ForCausalLM(WaveBaseModel, _Phi3ForCausalLM):
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-        )
-
-    def generate(
-        self,
-        input_ids: Optional[torch.LongTensor] = None,
-        input_wave_embeds: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        **model_kwargs
-    ):
-        """Generate with wave features"""
-        assert input_wave_embeds is not None and input_ids is not None, \
-            "input_wave_embeds and input_ids must be provided"
-        
-        # Create default attention_mask if None
-        if attention_mask is None:
-            attention_mask = torch.ones(
-                input_ids.shape,
-                dtype=torch.long,
-                device=input_ids.device
-            )
-        
-        # Pass input_ids, input_wave_embeds to super().generate()
-        # The model's forward will handle fusion
-        return super().generate(
-            input_ids=input_ids,
-            input_wave_embeds=input_wave_embeds,
-            attention_mask=attention_mask,
-            use_cache=True,
-            **model_kwargs
         )

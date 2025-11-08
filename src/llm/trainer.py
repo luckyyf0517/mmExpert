@@ -54,7 +54,7 @@ class WaveLLMTrainer(pl.LightningModule):
         # Create tokenizer
         self.tokenizer = ModelFactory.create_tokenizer(cfg.model)
         self.tokenizer.add_special_tokens({'additional_special_tokens': ['<|end|>']})
-        self.model.tokenizer = self.tokenizer
+        self.model.model.tokenizer = self.tokenizer
 
         # Setup wave tokens and conversation template
         self._setup_wave_tokens_and_conversation(cfg)
@@ -123,6 +123,52 @@ class WaveLLMTrainer(pl.LightningModule):
         # Initialize new token embeddings
         if num_new_tokens > 0:
             self._initialize_new_token_embeddings(num_new_tokens)
+
+    def _prepare_generation_prompts_batch(self, questions, device):
+        """Prepare prompts for batch generation with only questions (no answers)
+        
+        Args:
+            questions: List of question strings
+            device: Target device for tensors
+            
+        Returns:
+            input_ids: Tokenized input IDs [B, L] (padded)
+            attention_mask: Attention mask [B, L]
+        """
+        from src.llm.utils import conversation as conversation_lib
+        from copy import deepcopy
+        from src.llm.datamodule import DEFAULT_WAVE_INDICATOR
+        
+        prompt_list = []
+        for question in questions:
+            # Get conversation template (use deepcopy to avoid modifying the original)
+            conv = deepcopy(conversation_lib.default_conversation)
+            
+            # Build prompt with wave indicator and question
+            qs = f"{DEFAULT_WAVE_INDICATOR}\n{question}"
+            
+            # Append user message with question
+            conv.append_message(conv.roles[0], qs)
+            # Append assistant message as None (model will generate from here)
+            conv.append_message(conv.roles[1], None)
+            
+            # Get prompt
+            prompt = conv.get_prompt()
+            prompt_list.append(prompt)
+        
+        # Tokenize all prompts together with padding
+        tokenized = self.tokenizer(
+            prompt_list,
+            return_tensors="pt",
+            padding="longest",
+            truncation=True,
+            max_length=self.tokenizer.model_max_length,
+        )
+        
+        input_ids = tokenized.input_ids.to(device)
+        attention_mask = tokenized.attention_mask.to(device)
+        
+        return input_ids, attention_mask
 
     def _initialize_new_token_embeddings(self, num_new_tokens):
         """Initialize new token embeddings with average of existing embeddings"""
@@ -410,68 +456,55 @@ class WaveLLMTrainer(pl.LightningModule):
         # Get device from model
         device = next(self.model.parameters()).device
         
-        # Move batch to device
-        input_ids = batch['input_ids'].to(device)
-        attention_mask = None
-        if batch.get('attention_mask') is not None:
-            attention_mask = batch['attention_mask'].to(device)
-        
         # Process mmwave features for entire batch at once
         mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
         
-        # Generate one sample at a time to avoid batch processing issues
+        # Prepare generation prompts for entire batch (only questions, no answers)
+        questions = batch['questions']
+        input_ids_batch, attention_mask_batch = self._prepare_generation_prompts_batch(questions, device)
+        
+        # Generate for entire batch at once
+        self.model.eval()
+        with torch.inference_mode():
+            with torch.autocast('cuda', dtype=torch.bfloat16):
+                outputs = self.model.generate(
+                    input_ids_batch,
+                    input_wave_embeds=mmwave_embeds,
+                    attention_mask=attention_mask_batch,
+                    do_sample=True,
+                    temperature=1.0,
+                    top_k=50,
+                    num_beams=4,
+                    max_new_tokens=30,
+                    top_p=0.95,
+                )
+
+        # Decode responses for entire batch
+        input_token_lens = attention_mask_batch.sum(dim=1).cpu().tolist()
+        
+        # Extract new tokens for each sample
+        responses = []
         for i in range(batch_size):
-            # Extract single sample
-            input_ids_single = input_ids[i:i+1]
-            attention_mask_single = None
-            if attention_mask is not None:
-                attention_mask_single = attention_mask[i:i+1]
-            
-            # Extract single mmwave_embeds from batch
-            mmwave_embeds_single = mmwave_embeds[i:i+1]
-
-            # Generate using input_ids and mmwave_embeds (reference settings)
-            self.model.eval()
-            with torch.inference_mode():
-                with torch.autocast('cuda', dtype=torch.bfloat16):
-                    if attention_mask_single is None:
-                        attention_mask_single = torch.ones(input_ids_single.shape, dtype=torch.long, device=input_ids_single.device)
-
-                    outputs = self.model.generate(
-                        input_ids_single,
-                        input_wave_embeds=mmwave_embeds_single,
-                        attention_mask=attention_mask_single,
-                        do_sample=True,
-                        temperature=1.0,
-                        top_k=50,
-                        num_beams=4,
-                        max_new_tokens=30,
-                        top_p=0.95,
-                    )
-
-            # Decode response following reference code
-            input_token_len = input_ids_single.shape[1]
+            input_token_len = input_token_lens[i]
             
             # Check if input and output match (like reference code)
-            n_diff_input_output = (input_ids_single != outputs[0, :input_token_len]).sum().item()
+            n_diff_input_output = (input_ids_batch[i] != outputs[i, :input_token_len]).sum().item()
             if n_diff_input_output > 0:
-                log_message("WARNING", f"{n_diff_input_output} output_ids are not the same as the input_ids", color="yellow")
+                log_message("WARNING", f"Sample {i}: {n_diff_input_output} output_ids are not the same as the input_ids", color="yellow")
             
             # Extract only new tokens (following reference code)
-            new_tokens = outputs[0, input_token_len:]
+            new_tokens = outputs[i, input_token_len:]
             
-            # Decode following reference code style (batch_decode for single sample)
-            response = self.tokenizer.batch_decode([new_tokens], skip_special_tokens=True)[0]
-            question = batch['questions'][i]
-            answer = batch['answers'][i]
+            # Decode response
+            response = self.tokenizer.decode(new_tokens.tolist(), skip_special_tokens=True)
             
             # Log empty generation for debugging
             if not response:
                 log_message("WARNING", f"Empty generation detected for sample {i}, new_tokens length: {len(new_tokens)}", color="yellow")
             
+            answer = batch['answers'][i]
+            log_sample_output(questions[i], response, answer, prefix="GENERATE")
             
-            log_sample_output(question, response, answer, prefix="GENERATE")
-
             responses.append(response)
         
         return responses
