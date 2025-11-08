@@ -382,9 +382,13 @@ class Evaluator():
         count_gt = []
 
         for idx, key in enumerate(bar):
-            pred = self.special_token_filter(all_pred[key]["pred"][0],clean=True,truncation=True,max_length=max_length)
+            pred_text = all_pred[key]["prediction"]
+            answer_text = all_pred[key]["answer"]
+            gt_list = [answer_text] if isinstance(answer_text, str) else answer_text
+            
+            pred = self.special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
             lan_pred[key] = [pred]
-            lan_gt[key] = [self.special_token_filter(i,clean=True,truncation=True,max_length=max_length) for i in all_pred[key]["gt"]]
+            lan_gt[key] = [self.special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
             batch_lan_pred += lan_pred[key]
             batch_lan_gt += lan_gt[key]
             count_gt += [len(lan_gt[key])]

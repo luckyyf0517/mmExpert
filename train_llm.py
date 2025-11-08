@@ -37,6 +37,8 @@ def parse_args():
     # Data root path (overrides config file)
     parser.add_argument('--data_root', type=str, default=None,
                         help='Path to feature directory (overrides config file)')
+    parser.add_argument('--split', type=str, default=None,
+                        help='Dataset split to use for training (overrides config file)')
 
     # Training parameters (override config file)
     parser.add_argument('--batch_size', type=int, default=None,
@@ -84,6 +86,9 @@ def main():
             cfg.model_cfg.encoder_path = cfg.data_cfg.data_root
 
     # Override training parameters if provided via command line
+    if args.split is not None:
+        cfg.data_cfg.train_split = args.split
+        log_message("CONFIG", f"Using train_split from command line: {args.split}", color="blue")
     override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     override_config(cfg.data_cfg, 'num_workers', args.num_workers, 'num_workers')
     override_config(cfg.training, 'max_epochs', args.max_epochs, 'max_epochs')

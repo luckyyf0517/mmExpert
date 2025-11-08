@@ -1,0 +1,105 @@
+You are a helpful assistant. Your task is to generate questions and answers for the given wave signal representing joint movements.
+
+The caption is: {captions}. And there will be a wave signal corresponding to the caption.
+
+Remember that all the captions are about the same action. DO NOT take them as different actions, you should generate the same questions and answers for all the captions.
+
+You must generate exactly 4 questions (QA01-QA04), each following a specific question template and answer format template.
+
+
+---
+QA01: Sport Related
+---
+
+Question Template (MUST use exactly this):
+  "Is the person performing a sport?"
+
+Answer Format Template (MUST follow one of these formats):
+  - If NO:  "No, the person is not performing a sport."
+  - If YES: "Yes, the person is performing [sport name]."
+
+Examples:
+  - "No, the person is not performing a sport."
+  - "Yes, the person is performing boxing."
+
+Full marks: 2 or 3 (2 for no, 3 for yes with sport name)
+
+
+---
+QA02: Action Count
+---
+
+Question Template (MUST use exactly this):
+  "How many actions does the person perform according to the wave signal?"
+
+Answer Format Template (MUST follow this format):
+  "The person performs [number] actions: [action1], [action2], [action3], ..."
+
+Examples:
+  - "The person performs one action: walking."
+  - "The person performs three actions: jumping, landing, and walking forward."
+
+Full marks: 2 or 3 (2 for 1-2 actions, 3 for 3+ actions)
+
+
+---
+QA03: Intention/Purpose
+---
+
+Question Template (MUST use exactly this):
+  "What is the intention of the person?"
+
+Answer Format Template (MUST follow this format):
+  "The person [intention description]."
+
+Examples:
+  - "The person is trying to move forward quickly."
+  - "The person is greeting someone or showing respect."
+  - "The person is exercising or training."
+
+Full marks: 2 or 3 (based on complexity)
+
+
+---
+QA04: Specific Detail
+---
+
+Question Template (generate a specific question based on the caption, but keep it concise):
+
+Examples of good questions:
+  - "Which hand does the person use to perform the action?"
+  - "Is the person moving forward or backward?"
+  - "Does the person use both arms in the motion?"
+
+Answer Format Template (MUST follow this format):
+  - For Yes/No questions:    "Yes, [explanation]." or "No, [explanation]."
+  - For Which/What questions: "[Direct answer]." or "The person [answer]."
+
+Examples:
+  - "Yes, the person uses both arms."
+  - "No, the person only uses the right arm."
+  - "The person is moving forward."
+  - "The right hand."
+
+Full marks: 2
+
+
+---
+CRITICAL REQUIREMENTS
+---
+
+1. QA01-QA03 MUST use the exact question templates specified above. DO NOT modify them.
+2. All answers MUST follow the answer format templates exactly.
+3. Answers must be concise and clear (typically 1-2 sentences).
+4. All answers must end with a period.
+5. Use only standard ASCII characters (no special Unicode characters like smart quotes, em dashes, etc.).
+6. Questions should be independent of each other.
+
+
+---
+OUTPUT FORMAT
+---
+
+Return the results strictly in the following JSON format without adding extra content:
+
+{{"QA01": {{"question": "Is the person performing a sport?", "answer": "No, the person is not performing a sport.", "full marks": 2}}, "QA02": {{"question": "How many actions does the person perform according to the wave signal?", "answer": "The person performs X actions: [list].", "full marks": 2}}, "QA03": {{"question": "What is the intention of the person?", "answer": "The person [intention].", "full marks": 2}}, "QA04": {{"question": "[specific question]", "answer": "[formatted answer].", "full marks": 2}}}}

@@ -140,22 +140,26 @@ class WaveCaptionDataset(Dataset):
                     data_item['question'] = qa['question']
                     data_item['answer'] = qa['answer']
                 processed_data.extend(data_items_caption)
-                # assign question QA to each data item
-                data_items = self._create_data_items(data[i], {'question': None, 'answer': ''})
-                for data_item in data_items:
-                    qa = random.choice(question_qas)
-                    data_item['question'] = qa['question']
-                    data_item['answer'] = qa['answer']
-                processed_data.extend(data_items)
+                # assign question QA to each data item (only if question_qas is not empty)
+                if question_qas:
+                    data_items = self._create_data_items(data[i], {'question': None, 'answer': ''})
+                    for data_item in data_items:
+                        qa = random.choice(question_qas)
+                        data_item['question'] = qa['question']
+                        data_item['answer'] = qa['answer']
+                    processed_data.extend(data_items)
             elif 'test' in self.split:
                 if self.opt.get('caption_only'):
                     qa_caption = caption_qas[0]
                     processed_data.extend(self._create_data_items(data[i], qa_caption))
                 else: 
-                    qa_question = random.choice(question_qas)
-                    # qa_question includes a caption related QA
-                    # processed_data.extend(self._create_data_items(data[i], qa_caption))
-                    processed_data.extend(self._create_data_items(data[i], qa_question))
+                    if question_qas:
+                        qa_question = random.choice(question_qas)
+                        processed_data.extend(self._create_data_items(data[i], qa_question))
+                    else:
+                        # Fallback to caption if no question QAs available
+                        qa_caption = caption_qas[0]
+                        processed_data.extend(self._create_data_items(data[i], qa_caption))
             else: 
                 raise ValueError(f"Invalid split: {self.split}")
         
