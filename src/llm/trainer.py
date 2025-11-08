@@ -12,7 +12,6 @@ from src.llm.utils.trainer_lora_utils import (
     print_trainable_parameters,
 )
 from src.llm.utils.trainer_debug_utils import (
-    decode_question_answer,
     predict_text_from_logits,
     log_sample_output,
 )
@@ -55,6 +54,7 @@ class WaveLLMTrainer(pl.LightningModule):
         # Create tokenizer
         self.tokenizer = ModelFactory.create_tokenizer(cfg.model)
         self.tokenizer.add_special_tokens({'additional_special_tokens': ['<|end|>']})
+        self.model.tokenizer = self.tokenizer
 
         # Setup wave tokens and conversation template
         self._setup_wave_tokens_and_conversation(cfg)
@@ -180,50 +180,6 @@ class WaveLLMTrainer(pl.LightningModule):
         for param in self.radar_encoder.parameters():
             param.requires_grad = False
 
-    def forward(self, batch):
-        """
-        Forward pass: mmwave features + conversation-based Q&A -> loss
-
-        Args:
-            batch: {
-                'mmwave_features': Dict with:
-                    'range_time': [B, H, W] radar range-time data
-                    'doppler_time': [B, H, W] radar doppler-time data
-                    'azimuth_time': [B, H, W] radar azimuth-time data
-                'input_ids': [B, L],  # tokenized conversation input with wave tokens
-                'labels': [B, L]  # tokenized labels with masked instructions
-                'attention_mask': [B, L]  # attention mask
-            }
-        Returns:
-            {'loss': tensor}
-        """
-        # Get input ids, labels, and attention mask
-        input_ids = batch['input_ids']
-        labels = batch['labels']
-        attention_mask = batch.get('attention_mask')
-
-        # Process mmwave features through encoder and projection
-        mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
-
-        # Forward pass with conversation-based input
-        outputs = self.model(
-            input_ids=input_ids,
-            input_wave_embeds=mmwave_embeds,
-            attention_mask=attention_mask,
-            labels=labels,
-            return_dict=True
-        )
-
-        if self.debug_mode and _is_rank_0():
-            try:
-                question, answer = decode_question_answer(self.tokenizer, batch, index=0)
-                prediction = predict_text_from_logits(self.tokenizer, outputs.logits, labels)
-                log_sample_output(question, prediction, answer, prefix="FORWARD")
-            except Exception as exc:
-                log_message("WARNING", f"Debug logging failed: {exc}", color="yellow")
-
-        return {'loss': outputs.loss}
-
     def _process_mmwave_features(self, mmwave_features):
         """
         Process raw radar data through encoder and projection layers
@@ -256,11 +212,11 @@ class WaveLLMTrainer(pl.LightningModule):
         # Convert dict to ModalityData format
         from src.clip.core.base import ModalityData, ModalityType
         modality_data = ModalityData(data=encoder_input, modality=ModalityType.RADAR)
-        
+                
         with torch.no_grad():  # Radar encoder is frozen
             result = self.radar_encoder.encode(modality_data, return_sequence=True)
             # Use sequence_features instead of features when return_sequence=True
-            encoder_output = result.sequence_features if result.sequence_features is not None else result.features  # [B, T, D]
+            encoder_output = result.sequence_features # [B, T, D]
 
         # The encoder should output [B, T, D] features
         mmwave_features_tensor = encoder_output  # [B, T, D]
@@ -276,6 +232,51 @@ class WaveLLMTrainer(pl.LightningModule):
         mmwave_embeds = self.model.mm_projection_layers(mmwave_features_tensor)  # [B, T, H]
 
         return mmwave_embeds
+
+    def forward(self, batch):
+        """
+        Forward pass: mmwave features + conversation-based Q&A -> loss
+
+        Args:
+            batch: {
+                'mmwave_features': Dict with:
+                    'range_time': [B, H, W] radar range-time data
+                    'doppler_time': [B, H, W] radar doppler-time data
+                    'azimuth_time': [B, H, W] radar azimuth-time data
+                'input_ids': [B, L],  # tokenized conversation input with wave tokens
+                'labels': [B, L]  # tokenized labels with masked instructions
+                'attention_mask': [B, L]  # attention mask
+            }
+        Returns:
+            {'loss': tensor}
+        """
+        # Get input ids, labels, and attention mask
+        input_ids = batch['input_ids']
+        labels = batch['labels']
+        attention_mask = batch.get('attention_mask')
+
+        # Process mmwave features through encoder and projection
+        mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
+        
+        # Forward pass with conversation-based input
+        outputs = self.model(
+            input_ids=input_ids,
+            input_wave_embeds=mmwave_embeds,
+            attention_mask=attention_mask,
+            labels=labels,
+            return_dict=True
+        )
+
+        if self.debug_mode and _is_rank_0():
+            try:
+                question = batch['questions'][0]    
+                answer = batch['questions'][0]
+                prediction = predict_text_from_logits(self.tokenizer, outputs.logits, labels)
+                log_sample_output(question, prediction, answer, prefix="FORWARD")
+            except Exception as exc:
+                log_message("WARNING", f"Debug logging failed: {exc}", color="yellow")
+
+        return {'loss': outputs.loss}
 
     def training_step(self, batch, batch_idx):
         outputs = self(batch)
@@ -357,7 +358,7 @@ class WaveLLMTrainer(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         """Generate predictions and save to JSON file"""
         import json
-        
+                
         # Generate predictions
         preds = self._generate_response(batch)
         
@@ -387,16 +388,6 @@ class WaveLLMTrainer(pl.LightningModule):
                 "answer": answer,
                 "prediction": preds[i] if i < len(preds) else ""
             }
-            
-            # Print result (only on rank 0, print all samples)
-            if _is_rank_0():
-                log_message("SAMPLE", f"\nSample {sample_idx}:", color="cyan")
-                if question:
-                    log_message("QUESTION", question, color="blue")
-                log_message("PREDICTION", preds[i] if i < len(preds) else "", color="green")
-                if answer:
-                    log_message("GROUND_TRUTH", answer, color="yellow")
-                print("-" * 50)
         
         # Write updated results
         with open(self.output_file, 'w', encoding='utf-8') as f:
@@ -419,23 +410,25 @@ class WaveLLMTrainer(pl.LightningModule):
         # Get device from model
         device = next(self.model.parameters()).device
         
+        # Move batch to device
+        input_ids = batch['input_ids'].to(device)
+        attention_mask = None
+        if batch.get('attention_mask') is not None:
+            attention_mask = batch['attention_mask'].to(device)
+        
+        # Process mmwave features for entire batch at once
+        mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
+        
         # Generate one sample at a time to avoid batch processing issues
         for i in range(batch_size):
             # Extract single sample
-            input_ids_single = batch['input_ids'][i:i+1].to(device)
+            input_ids_single = input_ids[i:i+1]
             attention_mask_single = None
-            if batch.get('attention_mask') is not None:
-                attention_mask_single = batch['attention_mask'][i:i+1].to(device)
+            if attention_mask is not None:
+                attention_mask_single = attention_mask[i:i+1]
             
-            # Extract single mmwave_features
-            mmwave_features_single = {
-                'range_time': batch['mmwave_features']['range_time'][i:i+1].to(device),
-                'doppler_time': batch['mmwave_features']['doppler_time'][i:i+1].to(device),
-                'azimuth_time': batch['mmwave_features']['azimuth_time'][i:i+1].to(device)
-            }
-            
-            # Process mmwave features through encoder and projection
-            mmwave_embeds_single = self._process_mmwave_features(mmwave_features_single)
+            # Extract single mmwave_embeds from batch
+            mmwave_embeds_single = mmwave_embeds[i:i+1]
 
             # Generate using input_ids and mmwave_embeds (reference settings)
             self.model.eval()
@@ -469,12 +462,14 @@ class WaveLLMTrainer(pl.LightningModule):
             
             # Decode following reference code style (batch_decode for single sample)
             response = self.tokenizer.batch_decode([new_tokens], skip_special_tokens=True)[0]
+            question = batch['questions'][i]
+            answer = batch['answers'][i]
             
             # Log empty generation for debugging
             if not response:
                 log_message("WARNING", f"Empty generation detected for sample {i}, new_tokens length: {len(new_tokens)}", color="yellow")
             
-            question, answer = decode_question_answer(self.tokenizer, batch, index=i)
+            
             log_sample_output(question, response, answer, prefix="GENERATE")
 
             responses.append(response)

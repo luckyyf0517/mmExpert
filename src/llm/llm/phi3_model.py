@@ -32,7 +32,7 @@ class Phi3Model(WaveBaseModel, _Phi3Model):
         # Embed input_ids if inputs_embeds not provided
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-        
+            
         # Fuse wave features on first forward (input_ids.shape[1] != 1) or during training
         # This matches the old version's condition exactly
         if input_ids.shape[1] != 1 or self.training:

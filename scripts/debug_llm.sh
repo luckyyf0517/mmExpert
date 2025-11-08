@@ -8,7 +8,7 @@
 DATA_ROOT=$1
 MODEL_CHECKPOINT=$2
 MAX_STEPS=${3:-10}
-BATCH_SIZE=4
+BATCH_SIZE=1
 
 
 echo -e "\033[32m[INFO]\033[0m Testing checkpoint on TRAINING dataset"

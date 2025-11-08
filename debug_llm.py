@@ -123,7 +123,7 @@ def main():
 
     data_module = WaveLLMDataModule(cfg_yaml.data_cfg)
     data_module.setup(stage='fit')
-    dataloader = data_module.val_dataloader()
+    dataloader = data_module.train_dataloader()
     
     # Test on training data with bf16-mixed (same as training)
     print(colored("[INFO]", "green") + " Using bf16-mixed precision (matching training)")

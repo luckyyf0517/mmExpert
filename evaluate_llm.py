@@ -3,6 +3,8 @@
 import torch
 import argparse
 import os
+import random
+import numpy as np
 from termcolor import colored
 import pytorch_lightning as pl
 from easydict import EasyDict
@@ -14,6 +16,16 @@ from src.llm.trainer import WaveLLMTrainer
 # Import shared utility functions
 from src.llm.utils.common_utils import override_config, load_model_from_checkpoint
 from src.logger import log_message
+
+
+def set_global_seed(seed: int) -> None:
+    """Set seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def main():
@@ -33,8 +45,13 @@ def main():
                         help="Dataset split to evaluate (overrides config file)")
     parser.add_argument("--batch_size", type=int, default=None,
                         help="Batch size for evaluation (overrides config file)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
 
     args = parser.parse_args()
+
+    # Set seeds
+    set_global_seed(args.seed)
 
     # Check checkpoint path
     checkpoint_path = args.model_checkpoint

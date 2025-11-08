@@ -238,6 +238,7 @@ class WaveCaptionDataset(Dataset):
 
         # Return raw data only - preprocessing done by datamodule.py
         return {
+            'filename': instance['filename'],
             'question': instance['question'],
             'answer': instance['answer'],
             'caption': instance['caption'],

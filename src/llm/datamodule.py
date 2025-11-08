@@ -246,6 +246,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
                 # Use the existing question/answer format
                 question = item['question']
                 answer = item['answer']
+                filename = item['filename']
                 
                 # Format as conversation
                 conversation = self.format_conversation(question, answer)
@@ -269,7 +270,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
                     'labels': processed_data["labels"][0],
                     'wave_embed': item['wave_embed'],  # Keep the original wave embedding
                     'question': question,
-                    'answer': answer
+                    'answer': answer,
+                    'filename': filename
                 }
         
         # Return wrapper dataset (lazy loading)
@@ -294,6 +296,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
         # Extract question and answer if available (for evaluation)
         questions = [item.get('question', '') for item in batch]
         answers = [item.get('answer', '') for item in batch]
+        filenames = [item.get('filename', '') for item in batch]
 
         # Stack wave_embeds into [B, H, W] format for each view
         # Find max time dimension (W) for each view to pad to same length
@@ -371,9 +374,9 @@ class WaveLLMDataModule(pl.LightningDataModule):
         }
         
         # Add question and answer if available (for evaluation)
-        if any(questions) or any(answers):
-            result['questions'] = questions
-            result['answers'] = answers
+        result['questions'] = questions
+        result['answers'] = answers
+        result['filenames'] = filenames
         
         return result
 
@@ -381,7 +384,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=self.num_workers,
             collate_fn=self._collate_fn,
             pin_memory=True
