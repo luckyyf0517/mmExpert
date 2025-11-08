@@ -6,67 +6,78 @@ from src.logger import log_message
 
 
 def decode_question_answer(tokenizer, batch, index: int = 0) -> Tuple[str, str]:
-    """Decode question and answer strings from a batch."""
+    """
+    Decode question and answer strings from a batch.
+    Format: 
+    <|syetem|> ... <|end|>
+    <|user|> ... <|end|>
+    <|assistant|> ... <|end|>
+    """
+    
     question = ""
     answer = ""
 
-    questions = batch.get('questions')
-    if questions:
-        if isinstance(questions, (list, tuple)):
-            if index < len(questions):
-                question = questions[index]
-        else:
-            question = str(questions)
+    decoded_input = tokenizer.decode(
+        batch['input_ids'][index].tolist(),
+        skip_special_tokens=False
+    )
 
-    answers = batch.get('answers')
-    if answers:
-        if isinstance(answers, (list, tuple)):
-            if index < len(answers):
-                answer = answers[index]
-        else:
-            answer = str(answers)
+    parts = decoded_input.split('<|end|>')
+    if len(parts) >= 3:
+        question_raw = parts[1].strip()
+        answer_raw = parts[2].strip()
+    else:
+        question_raw = decoded_input
+        answer_raw = ""
 
-    if not question and 'input_ids' in batch:
-        decoded_input = tokenizer.decode(
-            batch['input_ids'][index].tolist(),
-            skip_special_tokens=True
-        )
-        if '<|end|>' in decoded_input:
-            parts = decoded_input.split('<|end|>')
-            question = parts[-2].strip() if len(parts) > 1 else decoded_input.strip()
-        else:
-            question = decoded_input.strip()
+    def _normalize_whitespace(text: str) -> str:
+        return " ".join(text.split())
 
-    if not answer and 'labels' in batch and batch['labels'] is not None:
-        labels = batch['labels'][index]
-        valid_mask = labels != -100
-        if valid_mask.any():
-            valid_tokens = labels[valid_mask]
-            answer = tokenizer.decode(
-                valid_tokens.tolist(),
-                skip_special_tokens=True
-            ).strip()
+    wave_start = "<wave_bos>"
+    wave_end = "<wave_eos>"
+    if wave_start in question_raw and wave_end in question_raw:
+        prefix, rest = question_raw.split(wave_start, 1)
+        _, suffix = rest.split(wave_end, 1)
+        question_raw = (prefix + suffix).strip()
+
+    question_raw = _normalize_whitespace(question_raw)
+    answer_raw = _normalize_whitespace(answer_raw)
+
+    if question_raw.startswith("<|user|>"):
+        question_raw = question_raw[len("<|user|>"):].strip()
+
+    question = f"{question_raw} <|end|>" if question_raw else ""
+    answer = f"{answer_raw} <|end|>" if answer_raw else ""
 
     return question, answer
 
 
 def predict_text_from_logits(tokenizer, logits, labels, index: int = 0) -> str:
-    """Convert logits to decoded assistant text."""
+    """Convert logits to decoded assistant text aligned with shifted labels."""
     if logits is None:
         return ""
 
-    token_ids = logits.argmax(dim=-1)[index]
+    token_predictions = logits.argmax(dim=-1)[index]
+
     if labels is not None:
         label_row = labels[index]
-        mask = label_row != -100
-        if mask.any():
-            token_ids = token_ids[mask]
+        if label_row.numel() > 1:
+            shift_logits = logits[index, :-1, :]
+            shift_labels = label_row[1:]
+            mask = shift_labels != -100
+            if mask.any():
+                token_predictions = shift_logits.argmax(dim=-1)[mask]
+            else:
+                token_predictions = shift_logits.argmax(dim=-1)
         else:
-            # Fallback: take a window from the end (likely assistant response)
-            window = min(64, token_ids.size(-1))
-            token_ids = token_ids[-window:]
+            token_predictions = token_predictions[:-1]
+    else:
+        token_predictions = token_predictions[:-1]
 
-    decoded = tokenizer.decode(token_ids.tolist(), skip_special_tokens=True)
+    if token_predictions.numel() == 0:
+        return ""
+
+    decoded = tokenizer.decode(token_predictions.tolist(), skip_special_tokens=False)
     return decoded
 
 
@@ -74,7 +85,7 @@ def log_sample_output(question: str, prediction: str, answer: str, prefix: str =
     """Standardized logging of question/prediction/answer triples."""
     log_message(f"{prefix} SAMPLE" if prefix else "SAMPLE", "", color="cyan")
     log_message("QUESTION", question, color="blue")
-    log_message("PREDICTION", prediction, color="green")
-    log_message("GROUND_TRUTH", answer, color="yellow")
+    log_message("GROUND_TRUTH", answer, color="green")
+    log_message("PREDICTION", prediction, color="yellow")
     print("-" * 50)
 
