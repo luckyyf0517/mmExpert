@@ -3,8 +3,8 @@
 # Evaluation script for fine-tuning Phi3 with mmwave features
 # Usage: bash scripts/eval_llm.sh path/to/checkpoint.ckpt data_root
 
-MODEL_CHECKPOINT=$1
-DATA_ROOT=$2
+DATA_ROOT=$1
+MODEL_CHECKPOINT=$2
 
 if [ -z "$MODEL_CHECKPOINT" ]; then
     echo -e "\033[31m[ERROR]\033[0m Error: Model checkpoint path is required"

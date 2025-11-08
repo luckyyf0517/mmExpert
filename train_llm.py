@@ -165,7 +165,12 @@ def main():
     log_message("SUCCESS", "Training completed successfully", color="green")
     
     # Save training artifacts (only on rank 0)
-    save_training_artifacts(model, cfg.log_dir)
+    from src.llm.trainer import _is_rank_0
+    if _is_rank_0():
+        log_message("INFO", "Rank 0: Saving training artifacts", color="green")
+        save_training_artifacts(model, cfg.log_dir)
+    else:
+        log_message("INFO", f"Non-rank 0: Skipping save", color="yellow")
 
 
 if __name__ == "__main__":

@@ -2,13 +2,20 @@
 
 import os
 import torch
-import torch.nn as nn
 import pytorch_lightning as pl
 from transformers import get_cosine_schedule_with_warmup
-from peft import LoraConfig, get_peft_model, TaskType
 from src.logger import log_message
 
 from .llm.model_factory import ModelFactory
+from src.llm.utils.trainer_lora_utils import (
+    setup_lora,
+    print_trainable_parameters,
+)
+from src.llm.utils.trainer_debug_utils import (
+    decode_question_answer,
+    predict_text_from_logits,
+    log_sample_output,
+)
 
 import warnings
 warnings.filterwarnings('ignore', message='.*Found .* module.*in eval mode.*')
@@ -47,6 +54,7 @@ class WaveLLMTrainer(pl.LightningModule):
 
         # Create tokenizer
         self.tokenizer = ModelFactory.create_tokenizer(cfg.model)
+        self.tokenizer.add_special_tokens({'additional_special_tokens': ['<|end|>']})
 
         # Setup wave tokens and conversation template
         self._setup_wave_tokens_and_conversation(cfg)
@@ -56,10 +64,13 @@ class WaveLLMTrainer(pl.LightningModule):
 
         # Initialize LoRA if enabled
         if cfg.use_peft:
-            self._setup_lora()
+            setup_lora(self, _is_rank_0)
 
         # Print trainable parameters
-        self._print_trainable_parameters()
+        print_trainable_parameters(self, _is_rank_0)
+        
+        # Debug mode while forward pass
+        self.debug_mode = False
 
     def _setup_wave_tokens_and_conversation(self, cfg):
         """Setup wave tokens and conversation template in model and tokenizer"""
@@ -169,152 +180,6 @@ class WaveLLMTrainer(pl.LightningModule):
         for param in self.radar_encoder.parameters():
             param.requires_grad = False
 
-    def _find_all_linear_names(self, model, multimodal_keywords=[]):
-        """Find all linear layer names for LoRA target modules
-        
-        Adopted from FastChat/Stanford Alpaca implementation.
-        Simple logic: find all Linear layers, exclude multimodal_keywords and lm_head.
-        
-        Args:
-            model: The model to search
-            multimodal_keywords: List of keywords to exclude (e.g., ['mm_projection', 'projection'])
-        
-        Returns:
-            List of linear layer names
-        """
-        cls = torch.nn.Linear
-        lora_module_names = set()
-        
-        for name, module in model.named_modules():
-            # Skip multimodal-related modules
-            if any(mm_keyword in name for mm_keyword in multimodal_keywords):
-                continue
-            if isinstance(module, cls):
-                lora_module_names.add(name)
-        
-        # Remove lm_head if present (needed for 16-bit)
-        if 'lm_head' in lora_module_names:
-            lora_module_names.remove('lm_head')
-        
-        return list(lora_module_names)
-
-    def _setup_lora(self):
-        """Setup LoRA for parameter-efficient fine-tuning"""
-        # Check if we should auto-find target_modules
-        use_auto_find = self.cfg.peft_config.get('auto_find_target_modules', False)
-        target_modules = self.cfg.peft_config.get('target_modules', None)
-        
-        # Modules to exclude from LoRA (like reference code's do_not_add_lora_model)
-        # mm_projection_layers should remain trainable but not wrapped with LoRA
-        multimodal_keywords = self.cfg.peft_config.get('multimodal_keywords', ['mm_projection_layers'])
-        
-        # If auto_find_target_modules is True, always use auto-find (ignore configured target_modules)
-        if use_auto_find:
-            target_modules = self._find_all_linear_names(self.model, multimodal_keywords=multimodal_keywords)
-            if _is_rank_0():
-                # Group modules by type for cleaner output
-                module_types = {}
-                for module_name in target_modules:
-                    if 'self_attn' in module_name:
-                        if 'qkv_proj' in module_name:
-                            module_type = 'self_attn.qkv_proj'
-                        elif 'o_proj' in module_name:
-                            module_type = 'self_attn.o_proj'
-                        else:
-                            module_type = 'self_attn.*'
-                    elif 'mlp' in module_name:
-                        if 'gate_up_proj' in module_name:
-                            module_type = 'mlp.gate_up_proj'
-                        elif 'down_proj' in module_name:
-                            module_type = 'mlp.down_proj'
-                        else:
-                            module_type = 'mlp.*'
-                    else:
-                        module_type = 'other'
-                    module_types[module_type] = module_types.get(module_type, 0) + 1
-                
-                log_message("INFO", f"Auto-found {len(target_modules)} linear modules for LoRA", color="green")
-                log_message("CONFIG", f"Module breakdown: {', '.join([f'{k}: {v}' for k, v in sorted(module_types.items())])}", color="blue")
-                log_message("CONFIG", f"Excluded: lm_head and modules containing [{', '.join(multimodal_keywords)}]", color="blue")
-        else: 
-            raise NotImplementedError("Manual setting target modules is not supported yet")
-        
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM,
-            inference_mode=False,
-            r=self.cfg.peft_config.r,
-            lora_alpha=self.cfg.peft_config.lora_alpha,
-            lora_dropout=self.cfg.peft_config.lora_dropout,
-            bias=self.cfg.peft_config.bias,
-            target_modules=target_modules,
-        )
-
-        self.model = get_peft_model(self.model, peft_config)
-
-        # Freeze base model except LoRA parameters, mm_projection_layers, and embeddings
-        # mm_projection_layers is excluded from LoRA target_modules and remains trainable
-        # Embeddings: only newly added tokens remain trainable via gradient masking
-        for name, param in self.model.named_parameters():
-            if 'lora' not in name and 'mm_projection_layers' not in name:
-                if 'embed_tokens' not in name and 'lm_head' not in name:
-                    param.requires_grad = False
-
-        # Re-enable gradients for mm_projection_layers and embeddings explicitly (PEFT disables them by default)
-        base_model = self.model.get_base_model()
-        if hasattr(base_model, 'mm_projection_layers') and base_model.mm_projection_layers is not None:
-            base_model.mm_projection_layers.requires_grad_(True)
-            base_model.mm_projection_layers.weight.requires_grad = True
-            if base_model.mm_projection_layers.bias is not None:
-                base_model.mm_projection_layers.bias.requires_grad = True
-
-        new_token_count = getattr(self, '_new_special_token_count', 0) or 0
-
-        input_embeds = self.model.get_input_embeddings()
-        if input_embeds is not None and hasattr(input_embeds, 'weight'):
-            weight = input_embeds.weight
-            if new_token_count > 0:
-                weight.requires_grad = True
-                start_idx = weight.shape[0] - new_token_count
-
-                def _mask_old_token_grads(grad):
-                    if grad is None:
-                        return None
-                    grad[:start_idx] = 0
-                    return grad
-
-                handle = getattr(self, '_input_embed_grad_hook', None)
-                if handle is not None:
-                    handle.remove()
-                self._input_embed_grad_hook = weight.register_hook(_mask_old_token_grads)
-            else:
-                weight.requires_grad = False
-                handle = getattr(self, '_input_embed_grad_hook', None)
-                if handle is not None:
-                    handle.remove()
-                    self._input_embed_grad_hook = None
-
-        # Some HuggingFace models tie lm_head with input embeddings; handle both cases safely
-        if hasattr(base_model, 'lm_head') and hasattr(base_model.lm_head, 'weight'):
-            lm_head_weight = base_model.lm_head.weight
-        elif hasattr(self.model, 'lm_head') and hasattr(self.model.lm_head, 'weight'):
-            lm_head_weight = self.model.lm_head.weight
-        else:
-            lm_head_weight = None
-
-        if lm_head_weight is not None:
-            handle = getattr(self, '_lm_head_grad_hook', None)
-            if handle is not None:
-                handle.remove()
-                self._lm_head_grad_hook = None
-
-            # Freeze lm_head (reference implementation keeps output embeddings fixed)
-            if lm_head_weight is input_embeds.weight:
-                # Shared embedding: avoid disabling gradients for input embeddings.
-                # In Phi-3 custom model lm_head is untied, so this branch should not trigger.
-                pass
-            else:
-                lm_head_weight.requires_grad = False
-
     def forward(self, batch):
         """
         Forward pass: mmwave features + conversation-based Q&A -> loss
@@ -348,6 +213,14 @@ class WaveLLMTrainer(pl.LightningModule):
             labels=labels,
             return_dict=True
         )
+
+        if self.debug_mode and _is_rank_0():
+            try:
+                question, answer = decode_question_answer(self.tokenizer, batch, index=0)
+                prediction = predict_text_from_logits(self.tokenizer, outputs.logits, labels)
+                log_sample_output(question, prediction, answer, prefix="FORWARD")
+            except Exception as exc:
+                log_message("WARNING", f"Debug logging failed: {exc}", color="yellow")
 
         return {'loss': outputs.loss}
 
@@ -580,7 +453,7 @@ class WaveLLMTrainer(pl.LightningModule):
                         top_k=50,
                         num_beams=4,
                         max_new_tokens=30,
-                        top_p=0.95
+                        top_p=0.95,
                     )
 
             # Decode response following reference code
@@ -596,75 +469,14 @@ class WaveLLMTrainer(pl.LightningModule):
             
             # Decode following reference code style (batch_decode for single sample)
             response = self.tokenizer.batch_decode([new_tokens], skip_special_tokens=True)[0]
-            response = response.strip()
             
             # Log empty generation for debugging
             if not response:
                 log_message("WARNING", f"Empty generation detected for sample {i}, new_tokens length: {len(new_tokens)}", color="yellow")
             
+            question, answer = decode_question_answer(self.tokenizer, batch, index=i)
+            log_sample_output(question, response, answer, prefix="GENERATE")
+
             responses.append(response)
         
         return responses
-
-    def _print_trainable_parameters(self):
-        """Print detailed information about trainable parameters"""
-        total_params = 0
-        trainable_params = 0
-
-        breakdown = {
-            'LoRA adapters': 0,
-            'mm_projection_layers': 0,
-            'embed_tokens (new rows)': 0,
-            'Other trainable': 0,
-        }
-
-        new_token_count = getattr(self, '_new_special_token_count', 0) or 0
-        embed_token_dim = None
-
-        for name, param in self.named_parameters():
-            param_count = param.numel()
-            total_params += param_count
-
-            if not param.requires_grad:
-                continue
-
-            trainable_count = param_count
-
-            if 'embed_tokens' in name:
-                if embed_token_dim is None and param.dim() >= 2:
-                    embed_token_dim = param.shape[1]
-                if new_token_count > 0 and embed_token_dim is not None:
-                    trainable_count = new_token_count * embed_token_dim
-                else:
-                    trainable_count = 0
-            elif 'lm_head' in name:
-                trainable_count = 0  # lm_head remains frozen
-
-            if trainable_count == 0:
-                continue
-
-            trainable_params += trainable_count
-
-            if 'lora_' in name:
-                breakdown['LoRA adapters'] += trainable_count
-            elif 'mm_projection_layers' in name:
-                breakdown['mm_projection_layers'] += trainable_count
-            elif 'embed_tokens' in name:
-                breakdown['embed_tokens (new rows)'] += trainable_count
-            else:
-                breakdown['Other trainable'] += trainable_count
-
-        if _is_rank_0():
-            ratio = (trainable_params / total_params * 100) if total_params > 0 else 0.0
-            header = f"Trainable params: {trainable_params:,} / {total_params:,} ({ratio:.2f}%)"
-            log_message("INFO", header, color="green")
-
-            log_message("INFO", "Breakdown (trainable):", color="green")
-            for key, value in breakdown.items():
-                if value == 0:
-                    continue
-                percent = value / trainable_params * 100 if trainable_params > 0 else 0.0
-                log_message("INFO", f"   - {key:<24}: {value:,} ({percent:.2f}%)", color="green")
-
-            frozen_params = total_params - trainable_params
-            log_message("INFO", f"Frozen params: {frozen_params:,}", color="green")
