@@ -44,9 +44,9 @@ def log_sample_output(question: str, prediction: str, answer: str, prefix: str =
         ground_truth_lines = [line.strip() for line in answer.split('#') if line.strip()]
         log_message("GROUND_TRUTH", ground_truth_lines[0], color="green")
         # Print remaining lines with indentation to align with GROUND_TRUTH content
+        # [GROUND_TRUTH] tag is approximately 16 characters, so use 16 spaces for alignment
         for line in ground_truth_lines[1:]:
-            # Use spaces to align with GROUND_TRUTH tag width (approximately)
-            print(f"  {line}")
+            print(f"{' ' * 16}{line}")
     else:
         log_message("GROUND_TRUTH", answer, color="green")
     
