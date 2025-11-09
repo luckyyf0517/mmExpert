@@ -119,14 +119,21 @@ def save_training_artifacts(model, output_dir, cfg=None):
         except Exception as e:
             log_message("WARNING", f"Failed to save training configuration: {e}", color="yellow")
 
-    # Save LoRA adapter weights (PEFT standard)
+    # Save LoRA adapter weights manually (only true LoRA parameters)
     lora_state_dict = get_peft_model_state_dict(model.model)
-    lora_state_dict = {k: v.contiguous() for k, v in lora_state_dict.items()}
 
-    save_file(lora_state_dict, os.path.join(output_dir, "adapter_model.safetensors"))
-    log_message("SUCCESS", f"LoRA adapter saved: {len(lora_state_dict)} parameters", color="green")
+    # Filter to save only true LoRA parameters (exclude embed_tokens and lm_head)
+    filtered_lora_state_dict = {}
+    for name, param in lora_state_dict.items():
+        # Only save tensors with 'lora_' in the name (true LoRA parameters)
+        if 'lora_' in name:
+            filtered_lora_state_dict[name] = param.contiguous()
 
-    # Save LoRA config
+    # Save LoRA adapter with filtered parameters
+    save_file(filtered_lora_state_dict, os.path.join(output_dir, "adapter_model.safetensors"))
+    log_message("SUCCESS", f"LoRA adapter saved: {len(filtered_lora_state_dict)} parameters", color="blue")
+
+    # Save PEFT config manually (since we're not using save_pretrained anymore)
     adapter_config = model.model.peft_config['default'].to_dict()
 
     # Convert sets to lists for JSON serialization
@@ -137,7 +144,8 @@ def save_training_artifacts(model, output_dir, cfg=None):
             return {k: make_json_serializable(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [make_json_serializable(item) for item in obj]
-        return obj
+        else:
+            return obj
 
     adapter_config = make_json_serializable(adapter_config)
     with open(os.path.join(output_dir, "adapter_config.json"), 'w') as f:
@@ -160,8 +168,8 @@ def save_training_artifacts(model, output_dir, cfg=None):
     save_file(non_lora_state_dict, os.path.join(output_dir, "non_lora_trainables.safetensors"))
     log_message("SUCCESS", f"Non-LoRA trainable parameters saved: {len(non_lora_state_dict)} parameters", color="green")
 
-    # Calculate sizes
-    lora_size = sum(p.numel() * p.element_size() for p in lora_state_dict.values()) / 1024 / 1024
+    # Calculate sizes (use filtered LoRA parameters)
+    lora_size = sum(p.numel() * p.element_size() for p in filtered_lora_state_dict.values()) / 1024 / 1024
     non_lora_size = sum(p.numel() * p.element_size() for p in non_lora_state_dict.values()) / 1024 / 1024
 
     log_message("INFO", f"LoRA adapter size: {lora_size:.2f} MB", color="green")
