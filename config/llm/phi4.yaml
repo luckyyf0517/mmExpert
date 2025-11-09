@@ -1,0 +1,42 @@
+# Configuration for fine-tuning Phi4 with mmwave features
+# Note: Phi-4-mini-instruct uses Phi3 architecture, so model_type is still phi3
+
+model_cfg:
+  model_type: phi3
+  use_peft: true
+
+  model:
+    model_path: "huggingface/models--microsoft--Phi-4-mini-instruct/snapshots/5a149550068a1eb93398160d8953f5f56c3603e9"
+    model_max_length: 2048
+
+  peft_config:
+    r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    bias: "none"
+    auto_find_target_modules: true  # Auto-find all linear layers (except lm_head and multimodal modules)
+    multimodal_keywords: ["mm_projection"]  # Exclude these keywords from LoRA
+
+  conversation_template: "conv_phi3"
+  mm_use_wave_start_end: true
+  wave_token_len: 248
+
+data_cfg:
+  model_path: "huggingface/models--microsoft--Phi-4-mini-instruct/snapshots/5a149550068a1eb93398160d8953f5f56c3603e9"
+  model_max_length: 2048
+  batch_size: 6
+  train_split: "train_QAs"
+  test_split: "test_QAs"
+
+  # Must match model_cfg
+  conversation_template: "conv_phi3"
+  mm_use_wave_start_end: true
+  wave_token_len: 248
+
+training:
+  learning_rate: 5e-4
+  weight_decay: 0.0
+  warmup_steps: 100
+
+log_dir: "output/phi4"
+

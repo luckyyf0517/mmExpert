@@ -38,12 +38,12 @@ class Evaluator():
         self.simcse_tokenizer = AutoTokenizer.from_pretrained(
             "princeton-nlp/sup-simcse-roberta-large",
             cache_dir=cache_dir,
-            local_files_only=True
+            local_files_only=False
         )
         self.simcse_model = AutoModel.from_pretrained(
             "princeton-nlp/sup-simcse-roberta-large",
             cache_dir=cache_dir,
-            local_files_only=True
+            local_files_only=False
         ).to("cuda")
 
         self.sbert_model = SentenceTransformer('all-mpnet-base-v2',device="cuda")

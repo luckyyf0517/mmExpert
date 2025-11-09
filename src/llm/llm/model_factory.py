@@ -10,6 +10,7 @@ class ModelFactory:
 
     MODEL_TYPES = {
         'phi3': Phi3ForCausalLM,
+        'phi4': Phi3ForCausalLM,  # Phi-4-mini-instruct uses Phi3 architecture
     }
 
     @classmethod
@@ -18,7 +19,7 @@ class ModelFactory:
         Create model instance
 
         Args:
-            model_type: 'phi3'
+            model_type: 'phi3' or 'phi4'
             config: Model configuration dict
 
         Returns:
