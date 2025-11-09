@@ -138,6 +138,9 @@ class WaveLLMDataModule(pl.LightningDataModule):
         self.mm_use_wave_start_end = cfg.get('mm_use_wave_start_end', True)
         self.wave_token_len = cfg.get('wave_token_len', 248)
 
+        # Inference mode flag
+        self.is_inference = cfg.get('is_inference', False)
+
     def setup(self, stage=None):
         """Setup datasets"""
         # Initialize tokenizer with conversation template
@@ -198,13 +201,19 @@ class WaveLLMDataModule(pl.LightningDataModule):
 
     def _format_conversation(self, question, answer):
         """Format question and answer into conversation format with wave indicator."""
-        return [{
+        conversation = [{
             "from": "human",
             "value": f"{DEFAULT_WAVE_INDICATOR}\n{question}"
-        }, {
-            "from": "gpt",
-            "value": answer
         }]
+
+        # Only add answer if not in inference mode
+        if not self.is_inference:
+            conversation.append({
+                "from": "gpt",
+                "value": answer
+            })
+
+        return conversation
 
     def _load_dataset(self, split):
         """Load dataset using existing wavellm_dataset logic but with new conversation handling
@@ -219,14 +228,15 @@ class WaveLLMDataModule(pl.LightningDataModule):
         original_dataset = WaveCaptionDataset(
             data_root=self.data_root,
             split=split,
-            tokenizer=self.tokenizer
+            tokenizer=self.tokenizer,
+            caption_only=self.cfg.get('caption_only', None)
         )
         
         # Create a wrapper dataset that processes items on-the-fly
         class ConversationDatasetWrapper(TorchDataset):
-            def __init__(self, base_dataset, format_conversation_fn, 
+            def __init__(self, base_dataset, format_conversation_fn,
                         preprocess_multimodal_wave_fn, preprocess_with_conversation_fn,
-                        tokenizer, conversation_template, mm_use_wave_start_end, wave_token_len):
+                        tokenizer, conversation_template, mm_use_wave_start_end, wave_token_len, is_inference):
                 self.base_dataset = base_dataset
                 self.format_conversation = format_conversation_fn
                 self.preprocess_multimodal_wave = preprocess_multimodal_wave_fn
@@ -235,6 +245,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
                 self.conversation_template = conversation_template
                 self.mm_use_wave_start_end = mm_use_wave_start_end
                 self.wave_token_len = wave_token_len
+                self.is_inference = is_inference
             
             def __len__(self):
                 return len(self.base_dataset)
@@ -242,32 +253,35 @@ class WaveLLMDataModule(pl.LightningDataModule):
             def __getitem__(self, index):
                 # Get item from base dataset (this loads NPZ file on-demand)
                 item = self.base_dataset[index]
-                
+
                 # Use the existing question/answer format
                 question = item['question']
                 answer = item['answer']
                 filename = item['filename']
-                
-                # Format as conversation
+
+                # Format as conversation (format_conversation handles inference mode by not adding answer to conversation)
                 conversation = self.format_conversation(question, answer)
-                
-                # Preprocess with wave tokens
+
+                # Preprocess with wave tokens (same for both training and inference)
                 processed_conversation = self.preprocess_multimodal_wave(
                     [conversation],
                     mm_use_wave_start_end=self.mm_use_wave_start_end,
                     wave_token_len=self.wave_token_len
                 )
-                
+
                 # Process with conversation template
                 processed_data = self.preprocess_with_conversation(
                     processed_conversation,
                     self.tokenizer,
                     self.conversation_template
                 )
-                
+
+                input_ids = processed_data["input_ids"][0]
+                labels = processed_data["labels"][0]
+
                 return {
-                    'input_ids': processed_data["input_ids"][0],
-                    'labels': processed_data["labels"][0],
+                    'input_ids': input_ids,
+                    'labels': labels,
                     'wave_embed': item['wave_embed'],  # Keep the original wave embedding
                     'question': question,
                     'answer': answer,
@@ -283,7 +297,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
             self.tokenizer,
             self.conversation_template,
             self.mm_use_wave_start_end,
-            self.wave_token_len
+            self.wave_token_len,
+            self.is_inference
         )
 
     def _collate_fn(self, batch):
@@ -377,7 +392,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
         result['questions'] = questions
         result['answers'] = answers
         result['filenames'] = filenames
-        
+
         return result
 
     def train_dataloader(self):

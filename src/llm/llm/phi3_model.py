@@ -46,6 +46,8 @@ class Phi3Model(WaveBaseModel, _Phi3Model):
                     input_ids=input_ids,
                     attention_mask=attention_mask
                 )
+            else: 
+                raise ValueError("input_wave_embeds is required for fusion")
         
         return super(Phi3Model, self).forward(
             input_ids=None,

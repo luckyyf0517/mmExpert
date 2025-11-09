@@ -62,12 +62,17 @@ DEFAULT_QUESTION_PROMPTS = [
 class WaveCaptionDataset(Dataset):
     """Dataset for wave caption tasks with multimodal support."""
     
-    def __init__(self, data_root=None, split="train", tokenizer=None) -> None:
+    def __init__(self, data_root=None, split="train", tokenizer=None, caption_only=None) -> None:
         super(WaveCaptionDataset, self).__init__()
         self.data_root = data_root
         self.split = split
         self.tokenizer = tokenizer
         self.opt = self._load_config(data_root, split)
+
+        # Override caption_only if provided
+        if caption_only is not None:
+            self.opt.caption_only = caption_only
+
         self.data = self._load_data()
         
         log_message("LOAD", f"load {len(self.data)} data as {self.split} set", color="green")

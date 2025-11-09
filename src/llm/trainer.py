@@ -124,52 +124,7 @@ class WaveLLMTrainer(pl.LightningModule):
         if num_new_tokens > 0:
             self._initialize_new_token_embeddings(num_new_tokens)
 
-    def _prepare_generation_prompts_batch(self, questions, device):
-        """Prepare prompts for batch generation with only questions (no answers)
-        
-        Args:
-            questions: List of question strings
-            device: Target device for tensors
-            
-        Returns:
-            input_ids: Tokenized input IDs [B, L] (padded)
-            attention_mask: Attention mask [B, L]
-        """
-        from src.llm.utils import conversation as conversation_lib
-        from copy import deepcopy
-        from src.llm.datamodule import DEFAULT_WAVE_INDICATOR
-        
-        prompt_list = []
-        for question in questions:
-            # Get conversation template (use deepcopy to avoid modifying the original)
-            conv = deepcopy(conversation_lib.default_conversation)
-            
-            # Build prompt with wave indicator and question
-            qs = f"{DEFAULT_WAVE_INDICATOR}\n{question}"
-            
-            # Append user message with question
-            conv.append_message(conv.roles[0], qs)
-            # Append assistant message as None (model will generate from here)
-            conv.append_message(conv.roles[1], None)
-            
-            # Get prompt
-            prompt = conv.get_prompt()
-            prompt_list.append(prompt)
-        
-        # Tokenize all prompts together with padding
-        tokenized = self.tokenizer(
-            prompt_list,
-            return_tensors="pt",
-            padding="longest",
-            truncation=True,
-            max_length=self.tokenizer.model_max_length,
-        )
-        
-        input_ids = tokenized.input_ids.to(device)
-        attention_mask = tokenized.attention_mask.to(device)
-        
-        return input_ids, attention_mask
-
+    
     def _initialize_new_token_embeddings(self, num_new_tokens):
         """Initialize new token embeddings with average of existing embeddings"""
         input_embeddings = self.model.get_input_embeddings().weight.data
@@ -460,10 +415,10 @@ class WaveLLMTrainer(pl.LightningModule):
 
         # Process mmwave features for entire batch at once
         mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
-        
-        # Prepare generation prompts for entire batch (only questions, no answers)
-        questions = batch['questions']
-        input_ids_batch, attention_mask_batch = self._prepare_generation_prompts_batch(questions, device)
+
+        # Use input_ids that are already formatted for inference (when is_inference=True)
+        input_ids_batch = batch['input_ids'].to(device)
+        attention_mask_batch = batch['attention_mask'].to(device)
         
         # Generate for entire batch at once
         self.model.eval()

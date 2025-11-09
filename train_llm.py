@@ -173,7 +173,7 @@ def main():
     from src.llm.trainer import _is_rank_0
     if _is_rank_0():
         log_message("INFO", "Rank 0: Saving training artifacts", color="green")
-        save_training_artifacts(model, cfg.log_dir)
+        save_training_artifacts(model, cfg.log_dir, cfg)
     else:
         log_message("INFO", f"Non-rank 0: Skipping save", color="yellow")
 

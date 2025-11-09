@@ -88,6 +88,11 @@ def main():
 
     # Load dataset using DataModule (same as training)
     log_message("LOAD", f"Loading dataset from {cfg.data_cfg.data_root}", color="cyan")
+
+    # Set inference mode for evaluation
+    cfg.data_cfg.is_inference = True
+    log_message("CONFIG", f"Setting inference mode: is_inference=True", color="blue")
+
     data_module = WaveLLMDataModule(cfg.data_cfg)
     data_module.setup(stage='test')
 

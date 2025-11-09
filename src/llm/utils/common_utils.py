@@ -80,12 +80,13 @@ def load_non_lora_trainables(model, checkpoint_path, require_grad_metadata=True)
         raise RuntimeError(f"Failed to load non-LoRA parameters: {e}") from e
 
 
-def save_training_artifacts(model, output_dir):
+def save_training_artifacts(model, output_dir, cfg=None):
     """Save LoRA adapter and non-LoRA trainable parameters (reference code approach)
 
     Args:
         model: WaveLLMTrainer model instance
         output_dir: Directory to save artifacts
+        cfg: Complete configuration object to save (optional)
     """
     from safetensors.torch import save_file
     from peft import get_peft_model_state_dict
@@ -94,6 +95,29 @@ def save_training_artifacts(model, output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
     log_message("INFO", f"Saving training artifacts to {output_dir}", color="green")
+
+    # Save complete training configuration if provided
+    if cfg is not None:
+        def config_to_dict(obj):
+            """Convert EasyDict and nested objects to serializable dict"""
+            if hasattr(obj, 'to_dict'):
+                return config_to_dict(obj.to_dict())
+            elif hasattr(obj, '__dict__'):
+                return config_to_dict(vars(obj))
+            elif isinstance(obj, dict):
+                return {k: config_to_dict(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [config_to_dict(item) for item in obj]
+            else:
+                return obj
+
+        try:
+            config_dict = config_to_dict(cfg)
+            with open(os.path.join(output_dir, "training_config.json"), 'w') as f:
+                json.dump(config_dict, f, indent=2, default=str)
+            log_message("CONFIG", f"Complete training configuration saved (training_config.json)", color="blue")
+        except Exception as e:
+            log_message("WARNING", f"Failed to save training configuration: {e}", color="yellow")
 
     # Save LoRA adapter weights (PEFT standard)
     lora_state_dict = get_peft_model_state_dict(model.model)
