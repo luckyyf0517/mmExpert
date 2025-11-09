@@ -42,11 +42,10 @@ def log_sample_output(question: str, prediction: str, answer: str, prefix: str =
     # Format GROUND_TRUTH: split by '#' and display on separate lines if multiple
     if '#' in answer:
         ground_truth_lines = [line.strip() for line in answer.split('#') if line.strip()]
-        log_message("GROUND_TRUTH", ground_truth_lines[0], color="green")
         # Print remaining lines with indentation to align with GROUND_TRUTH content
         # [GROUND_TRUTH] tag is approximately 16 characters, so use 16 spaces for alignment
-        for line in ground_truth_lines[1:]:
-            print(f"{' ' * 16}{line}")
+        for line in ground_truth_lines:
+            print(f" -  {line}")
     else:
         log_message("GROUND_TRUTH", answer, color="green")
     

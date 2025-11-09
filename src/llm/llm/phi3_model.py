@@ -65,11 +65,18 @@ class Phi3Model(WaveBaseModel, _Phi3Model):
 class Phi3ForCausalLM(WaveBaseModel, _Phi3ForCausalLM):
     """Custom Phi3ForCausalLM that uses custom Phi3Model"""
     
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, **kwargs):
+        # Extract dtype from kwargs for compatibility with newer transformers
+        dtype = kwargs.pop('dtype', None)
+        
+        super().__init__(config, **kwargs)
         # Replace self.model with our custom Phi3Model
         self.model = Phi3Model(config)
         self.post_init()
+        
+        # Convert model to specified dtype if provided (for compatibility)
+        if dtype is not None:
+            self.to(dtype=dtype)
         
         # mm_projection_layers will be initialized later via initialize_wave_projection()
         self.mm_projection_layers = None
