@@ -448,36 +448,7 @@ class WaveLLMTrainer(pl.LightningModule):
         
         # Decode generated tokens
         responses = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-        
-        # Clean conversation template tokens that may appear in generated text
-        # These tokens are not removed by skip_special_tokens=True
-        conversation_tokens_to_remove = [
-            "<|assistant|>",
-            "<|assistant|>\n",
-            "<|user|>",
-            "<|user|>\n",
-            "<|system|>",
-            "<|system|>\n",
-            "<|end|>",
-            "<|im_start|>assistant",
-            "<|im_start|>assistant\n",
-            "<|im_start|>user",
-            "<|im_start|>user\n",
-            "<|im_end|>",
-            "ASSISTANT:",
-            "ASSISTANT: ",
-        ]
-        
-        cleaned_responses = []
-        for response in responses:
-            cleaned = response.strip()
-            # Remove conversation template tokens from the beginning
-            for token in conversation_tokens_to_remove:
-                if cleaned.startswith(token):
-                    cleaned = cleaned[len(token):].strip()
-            cleaned_responses.append(cleaned)
-        
-        responses = cleaned_responses
+        responses = [response.strip() for response in responses]
         
 
         for i in range(batch_size):

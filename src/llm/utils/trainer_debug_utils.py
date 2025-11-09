@@ -38,7 +38,18 @@ def log_sample_output(question: str, prediction: str, answer: str, prefix: str =
     """Standardized logging of question/prediction/answer triples."""
     log_message(f"{prefix} SAMPLE" if prefix else "SAMPLE", "", color="cyan")
     log_message("QUESTION", question, color="blue")
-    log_message("GROUND_TRUTH", answer, color="green")
+    
+    # Format GROUND_TRUTH: split by '#' and display on separate lines if multiple
+    if '#' in answer:
+        ground_truth_lines = [line.strip() for line in answer.split('#') if line.strip()]
+        log_message("GROUND_TRUTH", ground_truth_lines[0], color="green")
+        # Print remaining lines with indentation to align with GROUND_TRUTH content
+        for line in ground_truth_lines[1:]:
+            # Use spaces to align with GROUND_TRUTH tag width (approximately)
+            print(f"  {line}")
+    else:
+        log_message("GROUND_TRUTH", answer, color="green")
+    
     log_message("PREDICTION", prediction, color="yellow")
     print("-" * 50)
 
