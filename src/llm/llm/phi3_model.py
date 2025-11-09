@@ -29,14 +29,15 @@ class Phi3Model(WaveBaseModel, _Phi3Model):
         **kwargs
     ):
         """Forward with wave feature fusion, matching old version's logic"""
-        
         # Embed input_ids if inputs_embeds not provided
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-            
+
         # Fuse wave features on first forward (input_ids.shape[1] != 1) or during training
         # This matches the old version's condition exactly
-        if input_ids.shape[1] != 1 or self.training:
+        fusion_condition = input_ids.shape[1] != 1 or self.training
+
+        if fusion_condition:
             if input_wave_embeds is not None:
                 # Fuse wave features
                 inputs_embeds, _ = self.process_wave_features(
@@ -103,6 +104,8 @@ class Phi3ForCausalLM(WaveBaseModel, _Phi3ForCausalLM):
         **kwargs,
     ):
         """Prepare inputs for generation, pass through input_wave_embeds"""
+        input_wave_embeds = kwargs.get("input_wave_embeds", None)
+
         model_inputs = super().prepare_inputs_for_generation(
             input_ids=input_ids,
             past_key_values=past_key_values,
@@ -113,12 +116,12 @@ class Phi3ForCausalLM(WaveBaseModel, _Phi3ForCausalLM):
             use_cache=use_cache,
             **kwargs
         )
-        
+
         # Pass through input_wave_embeds to forward
         model_inputs.update({
-            "input_wave_embeds": kwargs.get("input_wave_embeds", None),
+            "input_wave_embeds": input_wave_embeds,
         })
-        
+
         return model_inputs
 
     def forward(

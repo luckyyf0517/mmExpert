@@ -74,6 +74,10 @@ def main():
     # Override config with command line arguments
     if args.split is not None:
         cfg.data_cfg.test_split = args.split
+        # If split doesn't contain "QA", set caption_only to true
+        if "QA" not in args.split:
+            override_config(cfg.data_cfg, 'caption_only', True, 'caption_only')
+            log_message("CONFIG", f"Split '{args.split}' doesn't contain 'QA', setting caption_only=True", color="blue")
     if args.batch_size is not None:
         override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     

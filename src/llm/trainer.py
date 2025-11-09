@@ -258,7 +258,7 @@ class WaveLLMTrainer(pl.LightningModule):
         # Convert dict to ModalityData format
         from src.clip.core.base import ModalityData, ModalityType
         modality_data = ModalityData(data=encoder_input, modality=ModalityType.RADAR)
-                
+
         with torch.no_grad():  # Radar encoder is frozen
             result = self.radar_encoder.encode(modality_data, return_sequence=True)
             # Use sequence_features instead of features when return_sequence=True
@@ -266,7 +266,7 @@ class WaveLLMTrainer(pl.LightningModule):
 
         # The encoder should output [B, T, D] features
         mmwave_features_tensor = encoder_output  # [B, T, D]
-        
+
         # Convert to model dtype after encoding
         mmwave_features_tensor = mmwave_features_tensor.to(dtype=model_dtype)
 
@@ -443,19 +443,21 @@ class WaveLLMTrainer(pl.LightningModule):
 
     def _generate_response(self, batch):
         """Generate response for a batch
-        
+
         Args:
             batch: Batch dict with 'input_ids', 'mmwave_features', 'attention_mask'
-            
+
         Returns:
             List of generated response strings
         """
         batch_size = batch['input_ids'].shape[0]
         responses = []
-        
+
         # Get device from model
         device = next(self.model.parameters()).device
-        
+
+        questions = batch.get('questions', [])
+
         # Process mmwave features for entire batch at once
         mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
         
@@ -465,6 +467,7 @@ class WaveLLMTrainer(pl.LightningModule):
         
         # Generate for entire batch at once
         self.model.eval()
+
         with torch.inference_mode():
             with torch.autocast('cuda', dtype=torch.bfloat16):
                 outputs = self.model.generate(
@@ -478,33 +481,19 @@ class WaveLLMTrainer(pl.LightningModule):
                     max_new_tokens=30,
                     top_p=0.95,
                 )
-
-        # Decode responses for entire batch
-        input_token_lens = attention_mask_batch.sum(dim=1).cpu().tolist()
         
-        # Extract new tokens for each sample
-        responses = []
+        input_token_len = input_ids_batch.shape[1]
+        n_diff_input_output = (input_ids_batch != outputs[:, :input_token_len]).sum().item()
+        if n_diff_input_output > 0:
+            log_message("WARNING", f"{n_diff_input_output} output_ids are not the same as the input_ids", color="yellow")
+
+        responses = self.tokenizer.batch_decode(outputs[:, input_token_len:], skip_special_tokens=True)
+        responses = [response.strip() for response in responses]
+
         for i in range(batch_size):
-            input_token_len = input_token_lens[i]
-            
-            # Check if input and output match (like reference code)
-            n_diff_input_output = (input_ids_batch[i] != outputs[i, :input_token_len]).sum().item()
-            if n_diff_input_output > 0:
-                log_message("WARNING", f"Sample {i}: {n_diff_input_output} output_ids are not the same as the input_ids", color="yellow")
-            
-            # Extract only new tokens (following reference code)
-            new_tokens = outputs[i, input_token_len:]
-            
-            # Decode response
-            response = self.tokenizer.decode(new_tokens.tolist(), skip_special_tokens=True)
-            
-            # Log empty generation for debugging
-            if not response:
-                log_message("WARNING", f"Empty generation detected for sample {i}, new_tokens length: {len(new_tokens)}", color="yellow")
-            
+            question = questions[i]
             answer = batch['answers'][i]
-            log_sample_output(questions[i], response, answer, prefix="GENERATE")
-            
-            responses.append(response)
+            response = responses[i]
+            log_sample_output(question, response, answer, prefix="GENERATE")
         
         return responses

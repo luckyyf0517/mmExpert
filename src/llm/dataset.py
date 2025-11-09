@@ -156,10 +156,8 @@ class WaveCaptionDataset(Dataset):
                     if question_qas:
                         qa_question = random.choice(question_qas)
                         processed_data.extend(self._create_data_items(data[i], qa_question))
-                    else:
-                        # Fallback to caption if no question QAs available
-                        qa_caption = caption_qas[0]
-                        processed_data.extend(self._create_data_items(data[i], qa_caption))
+                    else: 
+                        raise ValueError(f"No question QAs available for {data[i]}")
             else: 
                 raise ValueError(f"Invalid split: {self.split}")
         
@@ -267,52 +265,3 @@ def init_tokenizer_only(model_path):
     )
     
     return tokenizer
-
-if __name__ == "__main__":
-    import sys
-    import os
-    
-    # Import conversation modules
-    from src.llm.utils import conversation as conversation_lib
-    from src.llm.utils.conversation import conv_templates
-    
-    # Set test parameters
-    data_root = "feature/clip_v1.11_bs64_r8a16"
-    model_name = "huggingface/models--microsoft--Phi-3-mini-4k-instruct/snapshots/0a67737cc96d2554230f90338b163bc6380a2a85"
-    
-    # Only get tokenizer, not the full model
-    tokenizer = init_tokenizer_only(model_name)
-    
-    # Set the conversation template like in eval_llm
-    conversation_lib.default_conversation = conversation_lib.conv_templates["conv_phi3"]
-    conv = conv_templates["conv_phi3"].copy()
-    
-    # # Test train mode
-    # print("=== TRAIN MODE ===")
-    # train_dataset = WaveCaptionDataset(data_root=data_root, split="train", tokenizer=tokenizer)
-    # if len(train_dataset) > 0:
-    #     train_item = train_dataset[0]
-    #     print(f"Train item keys: {list(train_item.keys())}")
-    #     print(f"Question: {train_item['question']}")
-    #     print(f"Answer: {train_item['answer'][:100]}...")
-    #     print(f"Wave embed shape: {train_item['wave_embed'].shape}")
-    
-    # Test test mode
-    log_message("DEBUG", "=== TEST MODE ===", color="cyan")
-    test_dataset = WaveCaptionDataset(data_root=data_root, split="test_QAs", tokenizer=tokenizer)
-
-    test_item = test_dataset[0]
-    log_message("DEBUG", "---", color="cyan")
-    log_message("DEBUG", f"Question: {test_item['question']}", color="cyan")
-    log_message("DEBUG", f"Answer: {test_item['answer']}", color="cyan")
-
-    test_item = test_dataset[1]
-    log_message("DEBUG", "---", color="cyan")
-    log_message("DEBUG", f"Question: {test_item['question']}", color="cyan")
-    log_message("DEBUG", f"Answer: {test_item['answer']}", color="cyan")
-
-    test_item = test_dataset[2]
-    log_message("DEBUG", "---", color="cyan")
-    log_message("DEBUG", f"Question: {test_item['question']}", color="cyan")
-    log_message("DEBUG", f"Answer: {test_item['answer']}", color="cyan")
-    

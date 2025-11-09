@@ -17,8 +17,8 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --data_root ${DATA_ROOT} \
     --batch_size 12 \
     --num_workers 4 \
-    --max_epochs 20 \
+    --max_epochs 10 \
     --gradient_accumulation_steps 1 \
     --zero_stage 2 \
     --dtype bf16 \
-    --split train_QAs
+    --split train

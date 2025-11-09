@@ -2,7 +2,7 @@ import os
 import json
 from glob import glob
 
-SPLIT = 'test'
+SPLIT = 'train'
 
 def combine_qa_files():
     """Combine all JSON files in train_QAs directory into one file."""
