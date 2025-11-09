@@ -50,10 +50,11 @@ class ModelFactory:
         tokenizer = AutoTokenizer.from_pretrained(
             model_path,
             model_max_length=config.get('model_max_length', 2048),
-            padding_side="right",
-            use_fast=False
+            padding_side=config.get('padding_side', 'right'),
+            use_fast=config.get('use_fast', False), 
+            local_files_only=config.get('local_files_only', True)
         )
-
+        
         # Set pad token if needed
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token

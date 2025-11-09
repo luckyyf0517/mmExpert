@@ -40,8 +40,15 @@ def preprocess_multimodal_wave(
     return sources
 
 
-def preprocess_with_conversation(sources, tokenizer, conversation_template="conv_phi3"):
-    """Process conversation data using conversation templates."""
+def preprocess_with_conversation(sources, tokenizer, conversation_template="conv_phi3", is_inference=False):
+    """Process conversation data using conversation templates.
+    
+    Args:
+        sources: List of conversation sources
+        tokenizer: Tokenizer instance
+        conversation_template: Template name (default: "conv_phi3")
+        is_inference: If True, append assistant role token to prompt for generation
+    """
     # Set conversation template
     conversation_lib.default_conversation = conversation_lib.conv_templates[conversation_template].copy()
     conv = conversation_lib.default_conversation
@@ -60,7 +67,15 @@ def preprocess_with_conversation(sources, tokenizer, conversation_template="conv
             role = roles[sentence["from"]]
             assert role == conv.roles[j % 2], f"Conversation format error at {i}"
             conv.append_message(role, sentence["value"])
-        conversations.append(conv.get_prompt())
+        
+        prompt = conv.get_prompt()
+        
+        # In inference mode, append assistant role token to guide generation
+        # This ensures model knows to generate assistant response, not user message
+        if is_inference:
+            prompt += conv.roles[1]  # Add "<|assistant|>\n"
+        
+        conversations.append(prompt)
 
     # Tokenize conversations
     input_ids = tokenizer(
@@ -273,7 +288,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
                 processed_data = self.preprocess_with_conversation(
                     processed_conversation,
                     self.tokenizer,
-                    self.conversation_template
+                    self.conversation_template,
+                    is_inference=self.is_inference
                 )
 
                 input_ids = processed_data["input_ids"][0]
@@ -369,9 +385,17 @@ class WaveLLMDataModule(pl.LightningDataModule):
             if current_len < max_len:
                 # Pad with pad_token_id for input_ids and -100 for labels
                 padding_length = max_len - current_len
-                padded_ids = ids.tolist() + [self.tokenizer.pad_token_id] * padding_length
-                padded_lbl = lbl.tolist() + [-100] * padding_length
-                attention_mask = [1] * current_len + [0] * padding_length
+
+                if self.is_inference:
+                    # Left padding for inference/generation
+                    padded_ids = [self.tokenizer.pad_token_id] * padding_length + ids.tolist()
+                    padded_lbl = [-100] * padding_length + lbl.tolist()
+                    attention_mask = [0] * padding_length + [1] * current_len
+                else:
+                    # Right padding for training
+                    padded_ids = ids.tolist() + [self.tokenizer.pad_token_id] * padding_length
+                    padded_lbl = lbl.tolist() + [-100] * padding_length
+                    attention_mask = [1] * current_len + [0] * padding_length
             else:
                 padded_ids = ids.tolist()
                 padded_lbl = lbl.tolist()

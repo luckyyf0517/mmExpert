@@ -442,8 +442,43 @@ class WaveLLMTrainer(pl.LightningModule):
         if n_diff_input_output > 0:
             log_message("WARNING", f"{n_diff_input_output} output_ids are not the same as the input_ids", color="yellow")
 
-        responses = self.tokenizer.batch_decode(outputs[:, input_token_len:], skip_special_tokens=True)
-        responses = [response.strip() for response in responses]
+        
+        # Extract generated tokens (excluding input)
+        generated_tokens = outputs[:, input_token_len:]
+        
+        # Decode generated tokens
+        responses = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+        
+        # Clean conversation template tokens that may appear in generated text
+        # These tokens are not removed by skip_special_tokens=True
+        conversation_tokens_to_remove = [
+            "<|assistant|>",
+            "<|assistant|>\n",
+            "<|user|>",
+            "<|user|>\n",
+            "<|system|>",
+            "<|system|>\n",
+            "<|end|>",
+            "<|im_start|>assistant",
+            "<|im_start|>assistant\n",
+            "<|im_start|>user",
+            "<|im_start|>user\n",
+            "<|im_end|>",
+            "ASSISTANT:",
+            "ASSISTANT: ",
+        ]
+        
+        cleaned_responses = []
+        for response in responses:
+            cleaned = response.strip()
+            # Remove conversation template tokens from the beginning
+            for token in conversation_tokens_to_remove:
+                if cleaned.startswith(token):
+                    cleaned = cleaned[len(token):].strip()
+            cleaned_responses.append(cleaned)
+        
+        responses = cleaned_responses
+        
 
         for i in range(batch_size):
             question = questions[i]

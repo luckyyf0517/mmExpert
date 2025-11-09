@@ -238,9 +238,6 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
     if hasattr(model.model, 'mm_projection_layers'):
         model.model.mm_projection_layers = model.model.mm_projection_layers.cuda()
 
-    # Set tokenizer padding_side to 'left' for decoder-only generation
-    model.tokenizer.padding_side = 'left'
-
     # IMPORTANT: Initialize tokenizer and wave backbone config (like reference code)
     base_model = model.model.get_base_model() if hasattr(model.model, 'get_base_model') else model.model
     if hasattr(base_model, 'initialize_tokenizer_wave_backbone_config'):
