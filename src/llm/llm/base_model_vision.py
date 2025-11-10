@@ -3,25 +3,58 @@
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
-from transformers import PreTrainedModel, AutoModelForVision2Seq
+from transformers import PreTrainedModel
 from typing import List, Optional, Union, Tuple
 from transformers.modeling_outputs import ModelOutput
 from termcolor import colored
 
 
-class WaveModelForVision2SeqBase(PreTrainedModel, AutoModelForVision2Seq):
-    """Abstract base class for Vision2Seq models with wave feature support
+class WaveModelBase(PreTrainedModel, ABC):
+    """Abstract base class for Vision2Seq models with wave feature support"""
 
-    This allows Vision2Seq models to accept pre-extracted wave features
-    instead of processing images through the vision encoder.
+    @abstractmethod
+    def _get_base_model_class(self):
+        """Get the base model class"""
+        pass
 
-    Usage:
-        When input_wave_embeds is provided, it bypasses the vision encoder and
-        directly uses the pre-extracted features (already projected to model dimension).
-    """
+    def forward(
+        self,
+        pixel_values: Optional[torch.Tensor] = None,
+        input_wave_embeds: Optional[torch.Tensor] = None,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs
+    ):
+        """
+        Forward pass for Vision2Seq models with wave feature support
+
+        Args:
+            pixel_values: Image pixel values [B, C, H, W]
+            input_wave_embeds: Wave features [B, N_w, H] (already projected)
+            input_ids: Text token ids [B, L]
+            attention_mask: Attention mask [B, L]
+            **kwargs: Additional arguments
+
+        Returns:
+            Model output (logits, hidden_states, etc.)
+        """
+        # Get the base class to call its forward method
+        base_class = self._get_base_model_class()
+
+        # Call base model forward with wave features as additional input
+        return super(base_class, self).forward(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            input_wave_embeds=input_wave_embeds,  # Pass wave features directly
+            **kwargs
+        )
+
+
+class WaveModelForVision2SeqBase(WaveModelBase, ABC):
+    """Abstract base class for Vision2Seq models with wave feature support"""
 
     def __init__(self, config, **kwargs):
-        """Initialize Vision2Seq model wrapper"""
         # Extract dtype from kwargs for compatibility
         dtype = kwargs.pop('dtype', None)
 
@@ -32,67 +65,33 @@ class WaveModelForVision2SeqBase(PreTrainedModel, AutoModelForVision2Seq):
         if dtype is not None:
             self.to(dtype=dtype)
 
+        # mm_projection_layers will be initialized later via initialize_wave_projection()
+        self.mm_projection_layers = None
+
     @abstractmethod
     def _get_base_model_class(self):
         """Get the base Vision2Seq model class"""
         pass
 
-    def forward(
-        self,
-        input_wave_embeds: Optional[torch.Tensor] = None,
-        pixel_values: Optional[torch.Tensor] = None,
-        input_ids: Optional[torch.LongTensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        **kwargs
-    ):
-        """
-        Forward pass with optional wave feature injection
+    def initialize_wave_projection(self, wave_feature_dim: int):
+        """Initialize wave feature projection layer
 
         Args:
-            input_wave_embeds: Pre-extracted wave features [B, N_v, D_v] (already projected)
-                              If provided, bypasses vision encoder and uses these features directly
-            pixel_values: Image pixel values [B, C, H, W]
-                         Used only if input_wave_embeds is None
-            input_ids: Text token ids [B, L]
-            attention_mask: Attention mask [B, L]
-            labels: Labels for loss computation [B, L]
-            **kwargs: Additional arguments
-
-        Returns:
-            Model output (loss, logits, etc.)
+            wave_feature_dim: Dimension of wave features (radar encoder output)
         """
-        # If input_wave_embeds provided, bypass vision encoder and use wave features directly
-        if input_wave_embeds is not None:
-            # Skip vision encoder processing and directly use wave features
-            # We need to manually construct what the vision encoder would output
+        if self.mm_projection_layers is not None:
+            # Already initialized
+            return
 
-            # Get the base class to call its forward method
-            base_class = self._get_base_model_class()
+        # Create projection layer with model's dtype
+        model_dtype = next(self.parameters()).dtype
+        self.mm_projection_layers = nn.Linear(
+            wave_feature_dim,
+            self.config.text_config.hidden_size if hasattr(self.config, 'text_config') else self.config.hidden_size
+        ).to(dtype=model_dtype)
 
-            # Create a modified kwargs that bypasses vision processing
-            # For Vision2Seq models, we need to simulate the vision encoder output
-            # input_wave_embeds should already be in the correct format for the model
-
-            # Call the parent's forward but bypass vision encoder
-            return super(base_class, self).forward(
-                pixel_values=None,  # Don't use pixel_values when we have wave features
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
-                input_features=input_wave_embeds,  # Use wave features as vision features
-                **kwargs
-            )
-        else:
-            # Normal forward with pixel_values (standard Vision2Seq behavior)
-            base_class = self._get_base_model_class()
-            return super(base_class, self).forward(
-                pixel_values=pixel_values,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
-                **kwargs
-            )
+    def get_output_embeddings(self):
+        return self.lm_head
 
     def prepare_inputs_for_generation(
         self,
@@ -115,9 +114,36 @@ class WaveModelForVision2SeqBase(PreTrainedModel, AutoModelForVision2Seq):
         )
 
         # Pass through input_wave_embeds to forward
-        if input_wave_embeds is not None:
-            model_inputs.update({
-                "input_wave_embeds": input_wave_embeds,
-            })
+        model_inputs.update({
+            "input_wave_embeds": input_wave_embeds,
+        })
 
         return model_inputs
+
+    def forward(
+        self,
+        pixel_values: Optional[torch.Tensor] = None,
+        input_wave_embeds: Optional[torch.Tensor] = None,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        **kwargs
+    ) -> Union[Tuple, ModelOutput]:
+        """Forward for Vision2Seq models with wave feature support"""
+
+        # Get the base class to call its forward method
+        base_class = self._get_base_model_class()
+
+        # Call base model forward with wave features only (no image input)
+        # pixel_values is set to None since we don't use image input
+        # input_wave_embeds are already projected and used as input_features for multimodal fusion
+        outputs = super(base_class, self).forward(
+            pixel_values=None,  # No image input
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            input_features=input_wave_embeds,  # Use wave features for multimodal fusion
+            **kwargs
+        )
+
+        return outputs

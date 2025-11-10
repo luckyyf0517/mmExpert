@@ -3,13 +3,13 @@
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
-from transformers import PreTrainedModel, AutoModelForCausalLM
+from transformers import PreTrainedModel
 from typing import List, Optional, Union, Tuple
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from termcolor import colored
 
 
-class WaveModelBase(PreTrainedModel, AutoModelForCausalLM):
+class WaveModelBase(PreTrainedModel, ABC):
     """Abstract base class for models with wave feature support"""
 
     def process_wave_features(
@@ -132,7 +132,7 @@ class WaveModelBase(PreTrainedModel, AutoModelForCausalLM):
         )
 
 
-class WaveModelForCausalBase(PreTrainedModel, AutoModelForCausalLM):
+class WaveModelForCausalBase(WaveModelBase, ABC):
     """Abstract base class for causal language models with wave feature support"""
 
     def __init__(self, config, **kwargs):
