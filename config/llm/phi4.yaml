@@ -6,7 +6,7 @@ model_cfg:
   use_peft: true
 
   model:
-    model_path: "huggingface/models--microsoft--Phi-4-mini-instruct/snapshots/5a149550068a1eb93398160d8953f5f56c3603e9"
+    model_path: "microsoft/Phi-4-mini-instruct"
     model_max_length: 2048
 
   peft_config:
@@ -22,7 +22,7 @@ model_cfg:
   wave_token_len: 248
 
 data_cfg:
-  model_path: "huggingface/models--microsoft--Phi-4-mini-instruct/snapshots/5a149550068a1eb93398160d8953f5f56c3603e9"
+  model_path: "microsoft/Phi-4-mini-instruct"
   model_max_length: 2048
   batch_size: 6
   train_split: "train_QAs"
