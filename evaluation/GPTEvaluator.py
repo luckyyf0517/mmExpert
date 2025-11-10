@@ -1,8 +1,7 @@
-import os
 import json
 import httpx
 import re
-import random
+from typing import Any, List
 from tqdm import tqdm
 from openai import OpenAI
 
@@ -43,6 +42,72 @@ prompt = (
 
 
 
+def normalize_text(text: Any) -> str:
+    if text is None:
+        return ""
+    normalized = str(text).strip()
+    normalized = normalized.replace("left", "right").replace("Left", "Right")
+    return normalized
+
+
+def resolve_field(container: dict, keys: List[str]) -> Any:
+    for key in keys:
+        if key in container and container[key] is not None:
+            return container[key]
+    return None
+
+
+def extract_single_text(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            result = extract_single_text(item)
+            if result:
+                return result
+        return ""
+    return normalize_text(value)
+
+
+def extract_reference_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    references: List[str] = []
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            references.extend(extract_reference_list(item))
+        return references
+    text = normalize_text(value)
+    if not text:
+        return []
+    segments = text.split("#") if "#" in text else [text]
+    return [segment.strip() for segment in segments if segment.strip()]
+
+
+def extract_caption_options(value: Any) -> List[str]:
+    if value is None:
+        return []
+    captions: List[str] = []
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            captions.extend(extract_caption_options(item))
+        return captions
+    text = normalize_text(value)
+    if not text:
+        return []
+    if ";" in text:
+        parts = [part.strip() for part in text.split(";")]
+        return [part for part in parts if part]
+    if "#" in text:
+        parts = [part.strip() for part in text.split("#")]
+        return [part for part in parts if part]
+    return [text]
+
+
+def format_as_bullet_list(items: List[str]) -> str:
+    if not items:
+        return "  - None"
+    return "\n".join(f"  - {item}" for item in items)
+
+
 # if __name__ == "__main__":
 def evaluate(output_path, local_rank=0, world_size=1, caption_only=False):
     
@@ -68,50 +133,71 @@ def evaluate(output_path, local_rank=0, world_size=1, caption_only=False):
     index = 0
     for key, item in tqdm(json_to_evaluate) if local_rank == 0 else json_to_evaluate:
         outdict = item
-        if not caption_only:    
-            question = outdict['question'].replace('left', 'right')
-            pred = outdict['pred'][0].replace('left', 'right')
-            pred_caption = outdict['pred_caption'][0].replace('left', 'right')
-            caption = '; '.join(outdict['caption']).replace('left', 'right')
-            gt = outdict['gt'][0].replace('left', 'right')
-        else: 
-            # question = 'Describe the human motion based on the provided wave signal representing joint movements.'
-            question = outdict['question'].replace('left', 'right')
-            pred = outdict['pred_caption'][0].replace('left', 'right')
-            gt = '; '.join(outdict['caption']).replace('left', 'right')
-        # evaluate captions
-        while True:
-            caption_ = random.choice(caption.split('; '))
-            response_cap = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "system", "content": prompt}, {"role": "user", "content": 
-                    "<Input>\n"
-                    f"- question: {question}\n"
-                    f"- pred: {pred_caption}\n"
-                    f"- gt: {caption_}</Input>"
-                    f"- caption: {caption}</Input>"}],
+        question = normalize_text(resolve_field(outdict, ["question"]) or "")
+        pred_caption = extract_single_text(resolve_field(outdict, ["pred_caption", "prediction_caption"]))
+        caption_pool = extract_caption_options(resolve_field(outdict, ["caption", "captions"]))
+        gt_answers = extract_reference_list(resolve_field(outdict, ["gt", "answer", "answers"]))
+        model_prediction = extract_single_text(resolve_field(outdict, ["pred", "prediction", "predictions"]))
+
+        response_cap = ""
+        correctness_cap = 0
+        hallucination_cap = 0
+
+        if not caption_only and pred_caption and caption_pool:
+            caption_input = (
+                "<Input>\n"
+                f"- question: {question}\n"
+                f"- prediction: {pred_caption}\n"
+                "- reference captions:\n"
+                f"{format_as_bullet_list(caption_pool)}\n"
+                "</Input>"
             )
-            response_cap = response_cap.choices[0].message.content
-            match_correctness = re.search(r'Correctness: (\d+) #', response_cap)
-            match_hallucination = re.search(r'Hallucination: (\d+) #', response_cap)
-            if match_correctness and match_hallucination:
-                correctness_cap = int(match_correctness.group(1))
-                hallucination_cap = int(match_hallucination.group(1))
-                break
-        total_correctness_cap += correctness_cap
-        total_hallucination_cap += hallucination_cap
-        # evaluate QAs
+            while True:
+                response_cap_obj = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": caption_input},
+                    ],
+                )
+                response_cap = response_cap_obj.choices[0].message.content
+                match_correctness = re.search(r'Correctness: (\d+) #', response_cap)
+                match_hallucination = re.search(r'Hallucination: (\d+) #', response_cap)
+                if match_correctness and match_hallucination:
+                    correctness_cap = int(match_correctness.group(1))
+                    hallucination_cap = int(match_hallucination.group(1))
+                    break
+            total_correctness_cap += correctness_cap
+            total_hallucination_cap += hallucination_cap
+
+        if caption_only:
+            qa_prediction = pred_caption
+            qa_references = caption_pool
+        else:
+            qa_prediction = model_prediction
+            qa_references = gt_answers
+
+        qa_input = (
+            "<Input>\n"
+            f"- question: {question}\n"
+            f"- prediction: {qa_prediction}\n"
+            "- reference answers:\n"
+            f"{format_as_bullet_list(qa_references)}\n"
+        )
+        if caption_pool and not caption_only:
+            qa_input += "- caption context:\n"
+            qa_input += f"{format_as_bullet_list(caption_pool)}\n"
+        qa_input += "</Input>"
+
         while True:
-            response = client.chat.completions.create(
+            response_obj = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "system", "content": prompt}, {"role": "user", "content": 
-                    "<Input>\n"
-                    f"- question: {question}\n"
-                    f"- answer: {pred}\n"
-                    f"- gt: {gt}\n"
-                    f"- caption: {caption}</Input>"}],
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": qa_input},
+                ],
             )
-            response = response.choices[0].message.content
+            response = response_obj.choices[0].message.content
             match_correctness = re.search(r'Correctness: (\d+) #', response)
             match_hallucination = re.search(r'Hallucination: (\d+) #', response)
             if match_correctness and match_hallucination:

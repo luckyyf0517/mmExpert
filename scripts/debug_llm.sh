@@ -21,7 +21,7 @@ echo ""
 # Run debug script (mimics training flow with bf16-mixed)
 python debug_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
-    --config config/llm/phi3.yaml \
+    --config config/llm/phi4.yaml \
     --data_root ${DATA_ROOT} \
     --max_batches ${MAX_STEPS} \
     --split train \

@@ -384,7 +384,11 @@ class Evaluator():
         for idx, key in enumerate(bar):
             pred_text = all_pred[key]["prediction"]
             answer_text = all_pred[key]["answer"]
-            gt_list = [answer_text] if isinstance(answer_text, str) else answer_text
+            # Split answer by # to handle multiple ground truths
+            if isinstance(answer_text, str) and '#' in answer_text:
+                gt_list = answer_text.split('#')
+            else:
+                gt_list = [answer_text] if isinstance(answer_text, str) else answer_text
             
             pred = self.special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
             lan_pred[key] = [pred]
@@ -400,6 +404,7 @@ class Evaluator():
                 batch_lan_pred = []
                 batch_lan_gt = []
                 count_gt = []
+                
         if len(batch_lan_pred):
             score = self.batch_eval(batch_lan_pred,batch_lan_gt,count_gt)
             all_simcse_similarity+=score[1]
