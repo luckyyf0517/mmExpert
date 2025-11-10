@@ -67,17 +67,10 @@ class Phi3ForCausalLM(_Phi3ForCausalLM):
     """Custom Phi3ForCausalLM that uses custom Phi3Model"""
     
     def __init__(self, config, **kwargs):
-        # Extract dtype from kwargs for compatibility with newer transformers
-        dtype = kwargs.pop('dtype', None)
-        
         super().__init__(config, **kwargs)
         # Replace self.model with our custom Phi3Model
         self.model = Phi3Model(config)
         self.post_init()
-        
-        # Convert model to specified dtype if provided (for compatibility)
-        if dtype is not None:
-            self.to(dtype=dtype)
         
         # mm_projection_layers will be initialized later via initialize_wave_projection()
         self.mm_projection_layers = None
@@ -88,16 +81,10 @@ class Phi3ForCausalLM(_Phi3ForCausalLM):
         Args:
             wave_feature_dim: Dimension of wave features (radar encoder output)
         """
-        if self.mm_projection_layers is not None:
-            # Already initialized
-            return
-        
-        # Create projection layer with model's dtype
-        model_dtype = next(self.parameters()).dtype
         self.mm_projection_layers = nn.Linear(
             wave_feature_dim, 
             self.config.hidden_size
-        ).to(dtype=model_dtype)
+        )
 
     def get_output_embeddings(self):
         return self.lm_head
