@@ -80,9 +80,10 @@ class WaveLLMTrainer(pl.LightningModule):
         conversation_lib.default_conversation = conversation_lib.conv_templates[conversation_template].copy()
 
         # Add wave tokens to tokenizer
-        DEFAULT_WAVE_PATCH_TOKEN = "<wave_patch>"
-        DEFAULT_WAVE_START_TOKEN = "<wave_bos>"
-        DEFAULT_WAVE_END_TOKEN = "<wave_eos>"
+        # Get token names from config with defaults
+        DEFAULT_WAVE_PATCH_TOKEN = cfg.get('wave_patch_token', '<wave_patch>')
+        DEFAULT_WAVE_START_TOKEN = cfg.get('wave_start_token', '<wave_bos>')
+        DEFAULT_WAVE_END_TOKEN = cfg.get('wave_end_token', '<wave_eos>')
 
         mm_use_wave_start_end = cfg.get('mm_use_wave_start_end', True)
 

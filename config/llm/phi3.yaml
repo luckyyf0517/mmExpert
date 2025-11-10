@@ -19,6 +19,9 @@ model_cfg:
   conversation_template: "conv_phi3"
   mm_use_wave_start_end: true
   wave_token_len: 248
+  wave_patch_token: "<wave_patch>"
+  wave_start_token: "<wave_bos>"
+  wave_end_token: "<wave_eos>" 
 
 data_cfg:
   model_path: "microsoft/Phi-3-mini-4k-instruct"
