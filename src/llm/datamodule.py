@@ -175,22 +175,22 @@ class WaveLLMDataModule(pl.LightningDataModule):
 
     def _load_tokenizer(self):
         """Load tokenizer from model path"""
-        # Convert to absolute path
-        model_path = os.path.abspath(self.model_path)
+        # Use model path directly (can be HuggingFace Hub identifier or local path)
+        model_path = self.model_path
         
-        # Check if path exists and is a directory
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+        # # Check if path exists and is a directory
+        # if not os.path.exists(model_path):
+        #     raise FileNotFoundError(f"Model path does not exist: {model_path}")
+
+        # if not os.path.isdir(model_path):
+        #     raise ValueError(f"Model path is not a directory: {model_path}")
         
-        if not os.path.isdir(model_path):
-            raise ValueError(f"Model path is not a directory: {model_path}")
-        
-        # Load tokenizer from local files only (no fallback to hub)
+        # Load tokenizer from local files or hub (allow fallback to hub for model identifiers)
         load_kwargs = {
             'model_max_length': self.model_max_length,
             'padding_side': "right",
             'use_fast': False,
-            'local_files_only': True
+            'local_files_only': False
         }
         
         tokenizer = AutoTokenizer.from_pretrained(
