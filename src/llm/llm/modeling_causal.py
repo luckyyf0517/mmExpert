@@ -32,14 +32,7 @@ def create_wave_causal_model(BaseModelClass):
             input_wave_embeds: torch.Tensor = None,
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
-            position_ids: Optional[torch.LongTensor] = None,
-            past_key_values: Optional[List[torch.FloatTensor]] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None,
-            cache_position: Optional[torch.LongTensor] = None,
             **kwargs
         ):
             """Forward with wave feature fusion"""
@@ -67,14 +60,7 @@ def create_wave_causal_model(BaseModelClass):
             return super().forward(
                 input_ids=None,
                 attention_mask=attention_mask,
-                past_key_values=past_key_values,
                 inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                cache_position=cache_position,
-                position_ids=position_ids,
                 **kwargs
             )
     
@@ -136,33 +122,15 @@ def create_wave_causal_lm(BaseForCausalLMClass, BaseModelClass=None):
         
         def prepare_inputs_for_generation(
             self,
-            input_ids,
-            past_key_values=None,
-            attention_mask=None,
-            inputs_embeds=None,
-            cache_position=None,
-            position_ids=None,
-            use_cache=True,
+            input_wave_embeds: torch.Tensor = None,
             **kwargs,
         ):
             """Prepare inputs for generation, pass through input_wave_embeds"""
-            input_wave_embeds = kwargs.get("input_wave_embeds", None)
-
-            model_inputs = super().prepare_inputs_for_generation(
-                input_ids=input_ids,
-                past_key_values=past_key_values,
-                attention_mask=attention_mask,
-                inputs_embeds=inputs_embeds,
-                cache_position=cache_position,
-                position_ids=position_ids,
-                use_cache=use_cache,
-                **kwargs
-            )
+            model_inputs = super().prepare_inputs_for_generation(**kwargs)
 
             # Pass through input_wave_embeds to forward
-            model_inputs.update({
-                "input_wave_embeds": input_wave_embeds,
-            })
+            if input_wave_embeds is not None:
+                model_inputs["input_wave_embeds"] = input_wave_embeds
 
             return model_inputs
 
@@ -171,36 +139,21 @@ def create_wave_causal_lm(BaseForCausalLMClass, BaseModelClass=None):
             input_wave_embeds: torch.Tensor = None,
             input_ids: torch.LongTensor = None,
             attention_mask: Optional[torch.Tensor] = None,
-            past_key_values: Optional[List[torch.FloatTensor]] = None,
             inputs_embeds: Optional[torch.FloatTensor] = None,
-            labels: Optional[torch.LongTensor] = None,
-            use_cache: Optional[bool] = None,
-            output_attentions: Optional[bool] = None,
-            output_hidden_states: Optional[bool] = None,
-            return_dict: Optional[bool] = None,
+            labels: Optional[torch.LongTensor] = None, 
+            return_dict: Optional[bool] = None, 
             **kwargs
         ) -> Union[Tuple, CausalLMOutputWithPast]:
             """Forward with wave feature fusion"""
-            
-            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-            output_hidden_states = (
-                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-            )
-            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-            position_ids = None
             
             # Call self.model (wave-enabled model) which handles wave fusion
             outputs = self.model(
                 input_ids=input_ids,
                 input_wave_embeds=input_wave_embeds,
                 attention_mask=attention_mask,
-                past_key_values=past_key_values,
                 inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
-                position_ids=position_ids, 
+                **kwargs
             )
             
             hidden_states = outputs[0]
@@ -208,16 +161,8 @@ def create_wave_causal_lm(BaseForCausalLMClass, BaseModelClass=None):
             
             loss = None
             if labels is not None:
-                from torch.nn import CrossEntropyLoss
-                # Shift so that tokens < n predict n
-                shift_logits = logits[..., :-1, :].contiguous()
-                shift_labels = labels[..., 1:].contiguous()
-                # Flatten the tokens
-                loss_fct = CrossEntropyLoss()
-                shift_logits = shift_logits.view(-1, self.config.vocab_size)
-                shift_labels = shift_labels.view(-1)
-                shift_labels = shift_labels.to(shift_logits.device)
-                loss = loss_fct(shift_logits, shift_labels)
+                from .utils import compute_causal_lm_loss
+                loss = compute_causal_lm_loss(logits, labels, self.config.vocab_size)
             
             if not return_dict:
                 output = (logits,) + outputs[1:]
