@@ -1,0 +1,44 @@
+# Configuration for fine-tuning Qwen3 with mmwave features
+
+model_cfg:
+  model_type: qwen2
+  use_peft: true
+
+  model:
+    model_path: "Qwen/Qwen2.5-VL-3B-Instruct"
+    model_max_length: 2048
+
+  peft_config:
+    r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    bias: "none"
+    auto_find_target_modules: true  # Auto-find all linear layers (except lm_head and multimodal modules)
+    multimodal_keywords: ["vision"]  # Exclude these keywords from LoRA
+
+  conversation_template: "qwen"
+  mm_use_wave_start_end: true
+  wave_token_len: 248
+  wave_patch_token: "<wave_patch>"
+  wave_start_token: "<wave_bos>"
+  wave_end_token: "<wave_eos>" 
+
+data_cfg:
+  model_path: "Qwen/Qwen3-4B-Instruct-2507"
+  model_max_length: 2048
+  batch_size: 6
+  train_split: "train_QAs"
+  test_split: "test_QAs"
+
+  # Must match model_cfg
+  conversation_template: "qwen"
+  mm_use_wave_start_end: true
+  wave_token_len: 248
+
+training:
+  learning_rate: 5e-4
+  weight_decay: 0.0
+  warmup_steps: 100
+
+log_dir: "output/qwen3"
+

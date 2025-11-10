@@ -137,7 +137,8 @@ class WaveLLMTrainer(pl.LightningModule):
 
         input_embeddings[-num_new_tokens:] = input_embeddings_avg
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
-
+        log_message("INFO", f"Initialized new token embeddings for {num_new_tokens} new tokens", color="green")
+        
     def _load_radar_encoder(self, encoder_path):
         """Load pre-trained radar encoder and projection layers"""
         import yaml
@@ -174,9 +175,11 @@ class WaveLLMTrainer(pl.LightningModule):
         self.radar_encoder = encoder
         self.radar_encoder.eval()  # Freeze encoder
 
-        # Initialize wave projection layer in the model
+        # Initialize wave projection layer in the model if enabled
         # Projection layer is created and owned by the model, not the trainer
-        self.model.initialize_wave_projection(embed_dim)
+        mm_use_projection = self.cfg.get('mm_use_projection', True)
+        if mm_use_projection:
+            self.model.initialize_wave_projection(embed_dim)
 
         # Freeze encoder parameters
         for param in self.radar_encoder.parameters():
@@ -218,20 +221,24 @@ class WaveLLMTrainer(pl.LightningModule):
         with torch.no_grad():  # Radar encoder is frozen
             result = self.radar_encoder.encode(modality_data, return_sequence=True)
             # Use sequence_features instead of features when return_sequence=True
-            encoder_output = result.sequence_features # [B, T, D]
-
-        # The encoder should output [B, T, D] features
-        mmwave_features_tensor = encoder_output  # [B, T, D]
+            mmwave_features = result.sequence_features # [B, T, D]
 
         # Convert to model dtype after encoding
-        mmwave_features_tensor = mmwave_features_tensor.to(dtype=model_dtype)
+        mmwave_features = mmwave_features.to(dtype=model_dtype)
 
-        # Ensure projection layer dtype matches input dtype
-        if mmwave_features_tensor.dtype != next(self.model.mm_projection_layers.parameters()).dtype:
-            self.model.mm_projection_layers = self.model.mm_projection_layers.to(dtype=mmwave_features_tensor.dtype)
-
-        # Project to model hidden size
-        mmwave_embeds = self.model.mm_projection_layers(mmwave_features_tensor)  # [B, T, H]
+        # Apply projection layer if enabled
+        mm_use_projection = self.cfg.get('mm_use_projection', True)
+        if mm_use_projection:
+            if self.model.mm_projection_layers is None:
+                raise RuntimeError("mm_use_projection is True but projection layer is not initialized")
+            # Ensure projection layer dtype matches input dtype
+            if mmwave_features.dtype != next(self.model.mm_projection_layers.parameters()).dtype:
+                self.model.mm_projection_layers = self.model.mm_projection_layers.to(dtype=mmwave_features.dtype)
+            # Project to model hidden size
+            mmwave_embeds = self.model.mm_projection_layers(mmwave_features)  # [B, T, H]
+        else:
+            # Return encoder output directly (assume dimensions already match)
+            mmwave_embeds = mmwave_features
 
         return mmwave_embeds
 
