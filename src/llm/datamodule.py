@@ -152,6 +152,13 @@ class WaveLLMDataModule(pl.LightningDataModule):
         # Wave token configuration
         self.mm_use_wave_start_end = cfg.get('mm_use_wave_start_end', True)
         self.wave_token_len = cfg.get('wave_token_len', 248)
+        
+        # Wave feature embedding configuration
+        self.embed_wave_features = cfg.get('embed_wave_features', True)
+        """Whether to embed wave features into the model.
+        If True: Wave features are processed and returned in batch (CausalLM approach)
+        If False: Wave features are not embedded, can be used for Vision2Seq wrapper approach
+        """
 
         # Inference mode flag
         self.is_inference = cfg.get('is_inference', False)
@@ -251,7 +258,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
         class ConversationDatasetWrapper(TorchDataset):
             def __init__(self, base_dataset, format_conversation_fn,
                         preprocess_multimodal_wave_fn, preprocess_with_conversation_fn,
-                        tokenizer, conversation_template, mm_use_wave_start_end, wave_token_len, is_inference):
+                        tokenizer, conversation_template, mm_use_wave_start_end, 
+                        wave_token_len, is_inference, embed_wave_features):
                 self.base_dataset = base_dataset
                 self.format_conversation = format_conversation_fn
                 self.preprocess_multimodal_wave = preprocess_multimodal_wave_fn
@@ -261,6 +269,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
                 self.mm_use_wave_start_end = mm_use_wave_start_end
                 self.wave_token_len = wave_token_len
                 self.is_inference = is_inference
+                self.embed_wave_features = embed_wave_features
             
             def __len__(self):
                 return len(self.base_dataset)
@@ -278,11 +287,20 @@ class WaveLLMDataModule(pl.LightningDataModule):
                 conversation = self.format_conversation(question, answer)
 
                 # Preprocess with wave tokens (same for both training and inference)
-                processed_conversation = self.preprocess_multimodal_wave(
-                    [conversation],
-                    mm_use_wave_start_end=self.mm_use_wave_start_end,
-                    wave_token_len=self.wave_token_len
-                )
+                # Only add wave tokens if embed_wave_features is True
+                if self.embed_wave_features:
+                    processed_conversation = self.preprocess_multimodal_wave(
+                        [conversation],
+                        mm_use_wave_start_end=self.mm_use_wave_start_end,
+                        wave_token_len=self.wave_token_len
+                    )
+                else:
+                    # Remove wave indicator without adding tokens (for Vision2Seq wrapper approach)
+                    processed_conversation = [conversation]
+                    for source in processed_conversation:
+                        for sentence in source:
+                            if sentence["value"] is not None:
+                                sentence["value"] = sentence["value"].replace(DEFAULT_WAVE_INDICATOR, "")
 
                 # Process with conversation template
                 processed_data = self.preprocess_with_conversation(
@@ -314,7 +332,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
             self.conversation_template,
             self.mm_use_wave_start_end,
             self.wave_token_len,
-            self.is_inference
+            self.is_inference,
+            self.embed_wave_features
         )
 
     def _collate_fn(self, batch):
@@ -329,48 +348,62 @@ class WaveLLMDataModule(pl.LightningDataModule):
         answers = [item.get('answer', '') for item in batch]
         filenames = [item.get('filename', '') for item in batch]
 
-        # Stack wave_embeds into [B, H, W] format for each view
-        # Find max time dimension (W) for each view to pad to same length
-        batch_size = len(wave_embeds)
+    def _pad_and_stack_wave_views(self, wave_embeds, view_names=['range_time', 'doppler_time', 'azimuth_time']):
+        """
+        Pad and stack wave embeddings for multiple views
         
+        Args:
+            wave_embeds: List of wave embedding dicts, each containing view tensors
+            view_names: List of view names to process
+            
+        Returns:
+            Dict with stacked and padded tensors for each view [B, H, W]
+        """
         # Get max time dimension for each view
-        max_range_time = max(embed['range_time'].shape[1] for embed in wave_embeds)
-        max_doppler_time = max(embed['doppler_time'].shape[1] for embed in wave_embeds)
-        max_azimuth_time = max(embed['azimuth_time'].shape[1] for embed in wave_embeds)
+        max_dims = {}
+        for view_name in view_names:
+            max_dims[view_name] = max(embed[view_name].shape[1] for embed in wave_embeds)
         
-        # Stack and pad each view to [B, H, W]
-        stacked_range_time = []
-        stacked_doppler_time = []
-        stacked_azimuth_time = []
-        
-        for embed in wave_embeds:
-            # Pad range_time to max time dimension
-            range_time = embed['range_time']  # [H, W]
-            if range_time.shape[1] < max_range_time:
-                pad_w = max_range_time - range_time.shape[1]
-                range_time = torch.cat([range_time, torch.zeros(range_time.shape[0], pad_w, dtype=range_time.dtype, device=range_time.device)], dim=1)
-            stacked_range_time.append(range_time)
+        # Stack and pad each view
+        stacked_views = {}
+        for view_name in view_names:
+            stacked_list = []
+            max_time = max_dims[view_name]
             
-            # Pad doppler_time
-            doppler_time = embed['doppler_time']  # [H, W]
-            if doppler_time.shape[1] < max_doppler_time:
-                pad_w = max_doppler_time - doppler_time.shape[1]
-                doppler_time = torch.cat([doppler_time, torch.zeros(doppler_time.shape[0], pad_w, dtype=doppler_time.dtype, device=doppler_time.device)], dim=1)
-            stacked_doppler_time.append(doppler_time)
+            for embed in wave_embeds:
+                view_tensor = embed[view_name]  # [H, W]
+                if view_tensor.shape[1] < max_time:
+                    pad_w = max_time - view_tensor.shape[1]
+                    view_tensor = torch.cat([
+                        view_tensor, 
+                        torch.zeros(
+                            view_tensor.shape[0], 
+                            pad_w, 
+                            dtype=view_tensor.dtype, 
+                            device=view_tensor.device
+                        )
+                    ], dim=1)
+                stacked_list.append(view_tensor)
             
-            # Pad azimuth_time
-            azimuth_time = embed['azimuth_time']  # [H, W]
-            if azimuth_time.shape[1] < max_azimuth_time:
-                pad_w = max_azimuth_time - azimuth_time.shape[1]
-                azimuth_time = torch.cat([azimuth_time, torch.zeros(azimuth_time.shape[0], pad_w, dtype=azimuth_time.dtype, device=azimuth_time.device)], dim=1)
-            stacked_azimuth_time.append(azimuth_time)
+            stacked_views[view_name] = torch.stack(stacked_list)  # [B, H, W]
         
-        # Stack to [B, H, W] format
-        mmwave_features = {
-            'range_time': torch.stack(stacked_range_time),  # [B, H, W]
-            'doppler_time': torch.stack(stacked_doppler_time),  # [B, H, W]
-            'azimuth_time': torch.stack(stacked_azimuth_time)  # [B, H, W]
-        }
+        return stacked_views
+
+    def _collate_fn(self, batch):
+        """Collate function for batches"""
+        # Extract features
+        wave_embeds = [item['wave_embed'] for item in batch]
+        input_ids = [item['input_ids'] for item in batch]
+        labels = [item['labels'] for item in batch]
+
+        # Extract question and answer if available (for evaluation)
+        questions = [item.get('question', '') for item in batch]
+        answers = [item.get('answer', '') for item in batch]
+        filenames = [item.get('filename', '') for item in batch]
+
+        # Process wave features - pad and stack all views
+        # Both embed_wave_features=True and False need padding for batching
+        mmwave_features = self._pad_and_stack_wave_views(wave_embeds)
 
         # Pad sequences to max length in batch
         max_len = max(len(ids) for ids in input_ids)

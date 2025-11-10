@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 from typing import Dict, Type, Any
-from transformers import (AutoConfig, AutoTokenizer, AutoModelForCausalLM,
+from transformers import (AutoConfig, AutoTokenizer,
                          Phi3Model as _Phi3Model, Phi3ForCausalLM as _Phi3ForCausalLM,
                          Qwen2Model as _Qwen2Model, Qwen2ForCausalLM as _Qwen2ForCausalLM)
 from .base_model_casual import WaveModelBase, WaveModelForCausalBase

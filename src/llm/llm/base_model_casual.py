@@ -3,14 +3,14 @@
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, AutoModelForCausalLM
 from typing import List, Optional, Union, Tuple
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from termcolor import colored
 
 
-class WaveBaseModel(PreTrainedModel):
-    """Base class for models with mmwave feature support"""
+class WaveModelBase(PreTrainedModel, AutoModelForCausalLM):
+    """Abstract base class for models with wave feature support"""
 
     def process_wave_features(
         self,
@@ -76,10 +76,6 @@ class WaveBaseModel(PreTrainedModel):
 
         return result_embeds, result_masks
 
-
-class WaveModelBase(WaveBaseModel, ABC):
-    """Abstract base class for models with wave feature support"""
-
     @abstractmethod
     def _get_base_model_class(self):
         """Get the base model class (Phi3Model or Qwen2Model)"""
@@ -136,7 +132,7 @@ class WaveModelBase(WaveBaseModel, ABC):
         )
 
 
-class WaveModelForCausalBase(WaveBaseModel, ABC):
+class WaveModelForCausalBase(PreTrainedModel, AutoModelForCausalLM):
     """Abstract base class for causal language models with wave feature support"""
 
     def __init__(self, config, **kwargs):
@@ -276,5 +272,3 @@ class WaveModelForCausalBase(WaveBaseModel, ABC):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
