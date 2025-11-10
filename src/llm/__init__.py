@@ -3,9 +3,10 @@
 from .trainer import WaveLLMTrainer
 from .datamodule import WaveLLMDataModule
 from .dataset import WaveCaptionDataset, DEFAULT_QUESTION_PROMPTS
-from .llm.model_factory import ModelFactory
-from .llm.base_model import WaveBaseModel
-from .llm.phi3_model import Phi3ForCausalLM
+from .llm.model_factory import (
+    ModelFactory, Phi3ForCausalLM, Qwen2ForCausalLM
+)
+from .llm.base_model_casual import WaveBaseModel
 
 __all__ = [
     'WaveLLMTrainer',
@@ -15,4 +16,5 @@ __all__ = [
     'ModelFactory',
     'WaveBaseModel',
     'Phi3ForCausalLM',
+    'Qwen2ForCausalLM',
 ]

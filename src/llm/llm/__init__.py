@@ -1,11 +1,19 @@
 # Import LLM model components
-from .base_model import WaveBaseModel
-from .model_factory import ModelFactory
-from .phi3_model import Phi3ForCausalLM
+from .base_model_casual import (
+    WaveBaseModel, WaveModelBase, WaveModelForCausalBase
+)
+from .model_factory import (
+    ModelFactory, Phi3Model, Phi3ForCausalLM, Qwen2Model, Qwen2ForCausalLM
+)
 
 __all__ = [
     'WaveBaseModel',
-    'ModelFactory',
+    'WaveModelBase',
+    'WaveModelForCausalBase',
+    'Phi3Model',
     'Phi3ForCausalLM',
+    'Qwen2Model',
+    'Qwen2ForCausalLM',
+    'ModelFactory',
 ]
 

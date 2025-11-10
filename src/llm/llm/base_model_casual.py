@@ -1,17 +1,89 @@
+"""Base model classes for models with mmwave feature support"""
+
 import torch
 import torch.nn as nn
-from transformers import Qwen2Model as _Qwen2Model, Qwen2ForCausalLM as _Qwen2ForCausalLM
+from abc import ABC, abstractmethod
+from transformers import PreTrainedModel
 from typing import List, Optional, Union, Tuple
-from .base_model import WaveBaseModel
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from termcolor import colored
 
-from transformers.modeling_outputs import (
-    CausalLMOutputWithPast,
-)
+
+class WaveBaseModel(PreTrainedModel):
+    """Base class for models with mmwave feature support"""
+
+    def process_wave_features(
+        self,
+        inputs_embeds: torch.FloatTensor,
+        input_wave_embeds: torch.Tensor,
+        input_ids: torch.LongTensor,
+        attention_mask: torch.LongTensor,
+    ) -> tuple[torch.FloatTensor, torch.LongTensor]:
+        """
+        Replace wave_patch_tokens with mmwave feature embeddings
+
+        Args:
+            inputs_embeds: Text embeddings [B, L, H]
+            input_wave_embeds: Mmwave features [B, T, H] (already projected)
+            input_ids: Input token ids [B, L]
+            attention_mask: Original attention mask [B, L] or None
+        Returns:
+            Combined embeddings [B, L_new, H] and updated attention mask [B, L_new]
+        """
+        batch_size = input_ids.shape[0]
+        wave_patch_token_id = getattr(self.config, 'wave_patch_token', None)
+        wave_token_len = getattr(self.config, 'wave_token_len', 248)
+
+        # Get device from input tensors
+        device = inputs_embeds.device
+
+        # Create default attention_mask if None
+        if attention_mask is None:
+            attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=device)
+
+        # Process each sample in the batch
+        new_embeds = []
+        new_masks = []
+
+        for batch_idx in range(batch_size):
+            sample_embeds = []
+            sample_mask = []
+            wave_idx = 0
+
+            for seq_idx in range(input_ids.shape[1]):
+                current_token_id = input_ids[batch_idx, seq_idx].item()
+
+                if current_token_id == wave_patch_token_id:
+                    # Replace this wave_patch_token with mmwave embeddings
+                    if wave_idx < input_wave_embeds.shape[1]:
+                        sample_embeds.append(input_wave_embeds[batch_idx, wave_idx])
+                        sample_mask.append(1)
+                        wave_idx += 1
+                    else:
+                        # No more wave features available, keep original
+                        sample_embeds.append(inputs_embeds[batch_idx, seq_idx])
+                        sample_mask.append(attention_mask[batch_idx, seq_idx].item())
+                else:
+                    # Regular token, keep original embedding
+                    sample_embeds.append(inputs_embeds[batch_idx, seq_idx])
+                    sample_mask.append(attention_mask[batch_idx, seq_idx].item())
+
+            new_embeds.append(torch.stack(sample_embeds))
+            new_masks.append(torch.tensor(sample_mask, dtype=torch.long, device=device))
+
+        result_embeds = torch.stack(new_embeds)
+        result_masks = torch.stack(new_masks)
+
+        return result_embeds, result_masks
 
 
-class Qwen2Model(WaveBaseModel, _Qwen2Model):
-    """Custom Qwen2Model that handles wave feature fusion"""
+class WaveModelBase(WaveBaseModel, ABC):
+    """Abstract base class for models with wave feature support"""
+
+    @abstractmethod
+    def _get_base_model_class(self):
+        """Get the base model class (Phi3Model or Qwen2Model)"""
+        pass
 
     def forward(
         self,
@@ -49,7 +121,9 @@ class Qwen2Model(WaveBaseModel, _Qwen2Model):
             else:
                 raise ValueError("input_wave_embeds is required for fusion")
 
-        return super(Qwen2Model, self).forward(
+        # Get the base class to call its forward method
+        base_class = self._get_base_model_class()
+        return super(base_class, self).forward(
             input_ids=None,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
@@ -62,17 +136,15 @@ class Qwen2Model(WaveBaseModel, _Qwen2Model):
         )
 
 
-class Qwen2ForCausalLM(WaveBaseModel, _Qwen2ForCausalLM):
-    """Custom Qwen2ForCausalLM that uses custom Qwen2Model"""
+class WaveModelForCausalBase(WaveBaseModel, ABC):
+    """Abstract base class for causal language models with wave feature support"""
 
     def __init__(self, config, **kwargs):
         # Extract dtype from kwargs for compatibility with newer transformers
         dtype = kwargs.pop('dtype', None)
 
+        # Initialize the parent CausalLM model (this will be called by concrete subclasses)
         super().__init__(config, **kwargs)
-        # Replace self.model with our custom Qwen2Model
-        self.model = Qwen2Model(config)
-        self.post_init()
 
         # Convert model to specified dtype if provided (for compatibility)
         if dtype is not None:
@@ -80,6 +152,11 @@ class Qwen2ForCausalLM(WaveBaseModel, _Qwen2ForCausalLM):
 
         # mm_projection_layers will be initialized later via initialize_wave_projection()
         self.mm_projection_layers = None
+
+    @abstractmethod
+    def _get_base_model_class(self):
+        """Get the base model class (Phi3ForCausalLM or Qwen2ForCausalLM)"""
+        pass
 
     def initialize_wave_projection(self, wave_feature_dim: int):
         """Initialize wave feature projection layer
@@ -115,7 +192,9 @@ class Qwen2ForCausalLM(WaveBaseModel, _Qwen2ForCausalLM):
         """Prepare inputs for generation, pass through input_wave_embeds"""
         input_wave_embeds = kwargs.get("input_wave_embeds", None)
 
-        model_inputs = super().prepare_inputs_for_generation(
+        # Get the base class to call its prepare_inputs_for_generation method
+        base_class = self._get_base_model_class()
+        model_inputs = super(base_class, self).prepare_inputs_for_generation(
             input_ids=input_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
@@ -156,7 +235,7 @@ class Qwen2ForCausalLM(WaveBaseModel, _Qwen2ForCausalLM):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         position_ids = None
 
-        # Call self.model (custom Qwen2Model) which handles wave fusion
+        # Call self.model (custom model) which handles wave fusion
         outputs = self.model(
             input_ids=input_ids,
             input_wave_embeds=input_wave_embeds,
@@ -197,3 +276,5 @@ class Qwen2ForCausalLM(WaveBaseModel, _Qwen2ForCausalLM):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
+
+
