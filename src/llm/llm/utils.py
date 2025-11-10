@@ -2,6 +2,35 @@
 
 import torch
 from typing import Optional
+from torch.nn import CrossEntropyLoss
+
+
+def compute_causal_lm_loss(
+    logits: torch.FloatTensor,
+    labels: torch.LongTensor,
+    vocab_size: int,
+) -> torch.FloatTensor:
+    """
+    Compute cross-entropy loss for causal language modeling
+    
+    Args:
+        logits: Model output logits [B, L, V]
+        labels: Ground truth labels [B, L]
+        vocab_size: Vocabulary size
+    
+    Returns:
+        Loss tensor (scalar)
+    """
+    # Shift so that tokens < n predict n
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    # Flatten the tokens
+    loss_fct = CrossEntropyLoss()
+    shift_logits = shift_logits.view(-1, vocab_size)
+    shift_labels = shift_labels.view(-1)
+    shift_labels = shift_labels.to(shift_logits.device)
+    loss = loss_fct(shift_logits, shift_labels)
+    return loss
 
 
 def process_wave_features(

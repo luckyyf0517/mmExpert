@@ -2,8 +2,7 @@
 
 import torch
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
-from .modeling_phi3 import Phi3ForCausalLM
-from .modeling_qwen3 import Qwen2ForCausalLM
+from . import Phi3ForCausalLM, Qwen2ForCausalLM
 
 
 class ModelFactory:
