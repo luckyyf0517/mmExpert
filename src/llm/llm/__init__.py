@@ -1,5 +1,5 @@
 # Import LLM model components
-from .base_model_casual import (
+from .modeling_casual import (
     WaveModelBase, WaveModelForCausalBase
 )
 from .model_factory import (

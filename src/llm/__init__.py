@@ -6,7 +6,7 @@ from .dataset import WaveCaptionDataset, DEFAULT_QUESTION_PROMPTS
 from .llm.model_factory import (
     ModelFactory, Phi3ForCausalLM, Qwen2ForCausalLM
 )
-from .llm.base_model_casual import WaveModelBase
+from .llm.modeling_casual import WaveModelBase
 
 __all__ = [
     'WaveLLMTrainer',

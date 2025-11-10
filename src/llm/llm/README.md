@@ -16,12 +16,12 @@ The codebase follows a two-layer abstraction pattern for multimodal model integr
 - Abstract base class definition for all wave-enabled models
 - Core wave feature processing logic (model-specific)
 
-#### CausalLM Models (`base_model_casual.py`)
+#### CausalLM Models (`modeling_casual.py`)
 - **`process_wave_features()`**: Replaces wave_patch_tokens in input_ids with wave features
 - **Token-based integration**: Wave features are embedded into text sequence
 - **Input processing**: `input_ids` contains special wave tokens that get replaced
 
-#### Vision2Seq Models (`base_model_vision.py`)
+#### Vision2Seq Models (`modeling_vision.py`)
 - **Direct multimodal input**: Wave features passed as separate modality
 - **No token replacement**: `input_ids` remains unchanged, wave features processed separately
 - **Input processing**: `input_features` used for wave-visual fusion
@@ -146,11 +146,11 @@ outputs = model(
 ## File Structure
 
 ```
-base_model_casual.py     # CausalLM models with wave token integration
+modeling_casual.py     # CausalLM models with wave token integration
 ├── WaveModelBase       # Token replacement logic
 └── WaveModelForCausalBase  # CausalLM wrapper + loss computation
 
-base_model_vision.py     # Vision2Seq models adapted for wave-only input
+modeling_vision.py     # Vision2Seq models adapted for wave-only input
 ├── WaveModelBase       # Direct multimodal input logic
 └── WaveModelForVision2SeqBase  # Wave-to-text wrapper
 
