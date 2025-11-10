@@ -425,7 +425,7 @@ class WaveLLMTrainer(pl.LightningModule):
         mmwave_embeds = self._process_mmwave_features(batch['mmwave_features'])
 
         # Use input_ids that are already formatted for inference (when is_inference=True)
-        input_ids_batch = batch['input_ids'].to(device)
+        input_ids = batch['input_ids'].to(device)
         attention_mask_batch = batch['attention_mask'].to(device)
         
         # Generate for entire batch at once
@@ -434,7 +434,7 @@ class WaveLLMTrainer(pl.LightningModule):
         with torch.inference_mode():
             with torch.autocast('cuda', dtype=torch.bfloat16):
                 outputs = self.model.generate(
-                    input_ids_batch,
+                    input_ids,
                     input_wave_embeds=mmwave_embeds,
                     attention_mask=attention_mask_batch,
                     do_sample=True,
@@ -445,8 +445,8 @@ class WaveLLMTrainer(pl.LightningModule):
                     top_p=0.95,
                 )
         
-        input_token_len = input_ids_batch.shape[1]
-        n_diff_input_output = (input_ids_batch != outputs[:, :input_token_len]).sum().item()
+        input_token_len = input_ids.shape[1]
+        n_diff_input_output = (input_ids != outputs[:, :input_token_len]).sum().item()
         if n_diff_input_output > 0:
             log_message("WARNING", f"{n_diff_input_output} output_ids are not the same as the input_ids", color="yellow")
 

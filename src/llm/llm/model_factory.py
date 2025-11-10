@@ -3,13 +3,7 @@
 import torch
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 from .modeling_phi3 import Phi3ForCausalLM
-
-# TODO: Create qwen3_model.py or import from appropriate location
-try:
-    from .qwen3_model import Qwen2ForCausalLM
-except ImportError:
-    # Fallback: use AutoModelForCausalLM for qwen2 if qwen3_model doesn't exist
-    Qwen2ForCausalLM = None
+from .modeling_qwen3 import Qwen2ForCausalLM
 
 
 class ModelFactory:
@@ -18,7 +12,7 @@ class ModelFactory:
     MODEL_TYPES = {
         'phi3': Phi3ForCausalLM,
         'phi4': Phi3ForCausalLM,  # Phi-4-mini-instruct uses Phi3 architecture
-        'qwen2': Qwen2ForCausalLM if Qwen2ForCausalLM is not None else None,  # Qwen3 uses Qwen2 architecture
+        'qwen2': Qwen2ForCausalLM,  # Qwen3 uses Qwen2 architecture
     }
 
     @classmethod
@@ -51,7 +45,6 @@ class ModelFactory:
         model = model_class.from_pretrained(
             model_path,
             config=original_config,
-            dtype=torch.bfloat16,
         )
 
         return model
