@@ -29,6 +29,8 @@ from sentence_transformers import SentenceTransformer, util
 from transformers import AutoModel, AutoTokenizer
 from utils import load_evaluation_data, extract_field_safely, save_evaluation_results
 
+
+
 class Evaluator():
     def __init__(self,directory_path,eval_bs) -> None:
         self.eval_bs = eval_bs
@@ -363,7 +365,7 @@ class Evaluator():
         return final_scores
 
 
-    def load_data_and_eval(self, max_length=1024):
+    def load_data_and_eval(self, max_length=1024, num_workers=1):
         all_pred = {}
         lan_gt = {}
         lan_pred = {}
@@ -373,48 +375,80 @@ class Evaluator():
 
         # Load evaluation data using the unified function
         all_pred = load_evaluation_data(self.directory_path, merged_filename="results.json")
-        bar = tqdm(all_pred)
 
-        batch_lan_pred = []
-        batch_lan_gt = []
-        count_gt = []
+        if num_workers == 1:
+            # Single-threaded evaluation (original approach)
+            bar = tqdm(all_pred)
+            batch_lan_pred = []
+            batch_lan_gt = []
+            count_gt = []
 
-        for idx, key in enumerate(bar):
-            pred_text = all_pred[key]["prediction"]
-            answer_text = all_pred[key]["answer"]
-            # Split answer by # to handle multiple ground truths
-            if isinstance(answer_text, str) and '#' in answer_text:
-                gt_list = answer_text.split('#')
-            else:
-                gt_list = [answer_text] if isinstance(answer_text, str) else answer_text
-            
-            pred = self.special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
-            lan_pred[key] = [pred]
-            lan_gt[key] = [self.special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
-            batch_lan_pred += lan_pred[key]
-            batch_lan_gt += lan_gt[key]
-            count_gt += [len(lan_gt[key])]
-            if idx % self.eval_bs==0:
-                score = self.batch_eval(batch_lan_pred,batch_lan_gt,count_gt)
-                all_simcse_similarity+=score[1]
-                all_sbert_similarity+=score[0]
+            for idx, key in enumerate(bar):
+                pred_text = all_pred[key]["prediction"]
+                answer_text = all_pred[key]["answer"]
+                # Answer should already be a list (preprocessed in utils.py)
+                gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
 
-                batch_lan_pred = []
-                batch_lan_gt = []
-                count_gt = []
-                
-        if len(batch_lan_pred):
-            score = self.batch_eval(batch_lan_pred,batch_lan_gt,count_gt)
-            all_simcse_similarity+=score[1]
-            all_sbert_similarity+=score[0]
-        
+                pred = self.special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
+                lan_pred[key] = [pred]
+                lan_gt[key] = [self.special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
+                batch_lan_pred += lan_pred[key]
+                batch_lan_gt += lan_gt[key]
+                count_gt += [len(lan_gt[key])]
+                if idx % self.eval_bs == 0:
+                    score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
+                    all_simcse_similarity += score[1]
+                    all_sbert_similarity += score[0]
+
+                    batch_lan_pred = []
+                    batch_lan_gt = []
+                    count_gt = []
+
+            if len(batch_lan_pred):
+                score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
+                all_simcse_similarity += score[1]
+                all_sbert_similarity += score[0]
+        else:
+            # Note: num_workers parameter is ignored for language evaluation
+            print("Note: num_workers parameter is ignored for language evaluation. Using single-threaded evaluation.")
+            print("Running single-threaded evaluation...")
+
+            bar = tqdm(all_pred)
+            batch_lan_pred = []
+            batch_lan_gt = []
+            count_gt = []
+
+            for idx, key in enumerate(bar):
+                pred_text = all_pred[key]["prediction"]
+                answer_text = all_pred[key]["answer"]
+                # Answer should already be a list (preprocessed in utils.py)
+                gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
+
+                pred = self.special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
+                lan_pred[key] = [pred]
+                lan_gt[key] = [self.special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
+                batch_lan_pred += lan_pred[key]
+                batch_lan_gt += lan_gt[key]
+                count_gt += [len(lan_gt[key])]
+                if idx % self.eval_bs == 0:
+                    score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
+                    all_simcse_similarity += score[1]
+                    all_sbert_similarity += score[0]
+
+                    batch_lan_pred = []
+                    batch_lan_gt = []
+                    count_gt = []
+
+            if len(batch_lan_pred):
+                score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
+                all_simcse_similarity += score[1]
+                all_sbert_similarity += score[0]
+
         assert len(all_simcse_similarity) == len(all_pred)
         
         # Use the new evaluation method that takes best GT score for each sample
         final_scores = self.evaluate_with_best_gt(ground_truths=lan_gt,
                                                  prediction=lan_pred)
-        print("=== Best GT Scores (Average across all samples) ===")
-        self.print_formated_dict(final_scores)
 
         # Calculate EM scores with best GT matching
         EM_best = []
@@ -442,28 +476,37 @@ class Evaluator():
             EM_best.append(best_EM)
             EM_refine_best.append(best_EM_refine)
         
-        print(f"EM (best):         {sum(EM_best)/len(EM_best)}")
-        print(f"refined EM (best): {sum(EM_refine_best)/len(EM_refine_best)}")
-
-        print(f"simcse (best):     {sum(all_simcse_similarity)/len(all_simcse_similarity)}")
-        print(f"sbert (best):      {sum(all_sbert_similarity)/len(all_sbert_similarity)}")
+        # Print final results (without "(best)" summary_language
+        print("=== Best GT Scores (Average across all samples) ===")
+        print("Bleu_1:      ", final_scores['Bleu_1'])
+        print("Bleu_2:      ", final_scores['Bleu_2'])
+        print("Bleu_3:      ", final_scores['Bleu_3'])
+        print("Bleu_4:      ", final_scores['Bleu_4'])
+        print("ROUGE_L:      ", final_scores['ROUGE_L'])
+        print("CIDEr:      ", final_scores['CIDEr'])
+        print("EM:         ", sum(EM_best)/len(EM_best))
+        print("refined EM: ", sum(EM_refine_best)/len(EM_refine_best))
+        print("simcse:     ", sum(all_simcse_similarity)/len(all_simcse_similarity))
+        print("sbert:      ", sum(all_sbert_similarity)/len(all_sbert_similarity))
 
         # Return evaluation results for saving
         return {
             'total_samples': len(EM_best),
+            'bleu_scores': {
+                'bleu_1': final_scores['Bleu_1'],
+                'bleu_2': final_scores['Bleu_2'],
+                'bleu_3': final_scores['Bleu_3'],
+                'bleu_4': final_scores['Bleu_4']
+            },
+            'rouge_score': final_scores['ROUGE_L'],
+            'cider_score': final_scores['CIDEr'],
             'exact_match': {
-                'em_best': sum(EM_best)/len(EM_best),
-                'em_refined_best': sum(EM_refine_best)/len(EM_refine_best)
+                'em': sum(EM_best)/len(EM_best),
+                'em_refined': sum(EM_refine_best)/len(EM_refine_best)
             },
             'similarity_metrics': {
-                'simcse_best': sum(all_simcse_similarity)/len(all_simcse_similarity),
-                'sbert_best': sum(all_sbert_similarity)/len(all_sbert_similarity)
-            },
-            'detailed_scores': {
-                'em_best': EM_best,
-                'em_refined_best': EM_refine_best,
-                'simcse_scores': all_simcse_similarity,
-                'sbert_scores': all_sbert_similarity
+                'simcse': sum(all_simcse_similarity)/len(all_simcse_similarity),
+                'sbert': sum(all_sbert_similarity)/len(all_sbert_similarity)
             }
         }
     
@@ -477,6 +520,7 @@ if __name__ == "__main__":
     parser.add_argument('--directory_path', type=str,
                        help='Path to directory or single JSON file (deprecated, use --evaluation_dir)')
     parser.add_argument('--eval_bs', type=int, default=100, help='evaluation batch size')
+    parser.add_argument('--num_workers', type=int, default=1, help='Number of parallel workers for evaluation')
 
     args = parser.parse_args()
 
@@ -494,14 +538,14 @@ if __name__ == "__main__":
         directory_path=input_path,
         eval_bs=args.eval_bs
     )
-    results = eval.load_data_and_eval(max_length=1024)
+    results = eval.load_data_and_eval(max_length=1024, num_workers=args.num_workers)
 
     # Save evaluation results
     if os.path.isdir(input_path):
-        output_file = os.path.join(input_path, "language_evaluation_summary.json")
+        output_file = os.path.join(input_path, "summary_language.json")
     else:
         # For single file input, save in same directory
-        output_file = os.path.join(os.path.dirname(input_path), "language_evaluation_summary.json")
+        output_file = os.path.join(os.path.dirname(input_path), "summary_language.json")
 
     save_evaluation_results(results, output_file)
     print(f"\nLanguage evaluation completed successfully!")

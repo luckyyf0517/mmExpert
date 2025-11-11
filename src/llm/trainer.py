@@ -346,7 +346,7 @@ class WaveLLMTrainer(pl.LightningModule):
             checkpoint_dir = getattr(self.cfg, 'log_dir', 'output')
         
         # Create evaluation directory
-        eval_dir = os.path.join(checkpoint_dir, "evaluation")
+        eval_dir = os.path.join(checkpoint_dir, "evaluation/ranks")
         os.makedirs(eval_dir, exist_ok=True)
         
         # Get rank for distributed training

@@ -69,18 +69,16 @@ def extract_single_text(value: Any) -> str:
 
 
 def extract_reference_list(value: Any) -> List[str]:
-    """Extract multiple references from value, supporting # separation for multiple answers"""
+    """Extract multiple references from value - answers should already be lists"""
     if value is None:
         return []
-    references: List[str] = []
     if isinstance(value, (list, tuple)):
-        for item in value:
-            references.extend(extract_reference_list(item))
-        return references
+        return [normalize_text(item) for item in value if item is not None]
+    # Handle string values for backward compatibility
     text = normalize_text(value)
     if not text:
         return []
-    # Use # as separator for multiple ground truth answers
+    # Use # as separator for multiple ground truth answers (legacy support)
     segments = text.split("#") if "#" in text else [text]
     return [segment.strip() for segment in segments if segment.strip()]
 
@@ -403,7 +401,7 @@ if __name__ == "__main__":
     }
 
     # Save summary to file
-    summary_file = os.path.join(args.evaluation_dir, "evaluation_summary.json")
+    summary_file = os.path.join(args.evaluation_dir, "summary_gpt.json")
     json.dump(summary, open(summary_file, 'w'), indent=2)
 
     # Print results with new field structure
