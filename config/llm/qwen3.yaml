@@ -1,7 +1,7 @@
 # Configuration for fine-tuning Qwen3 with mmwave features
 
 model_cfg:
-  model_type: qwen2
+  model_type: qwen3
   use_peft: true
 
   model:

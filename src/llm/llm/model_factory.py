@@ -2,7 +2,7 @@
 
 import torch
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
-from . import Phi3ForCausalLM, Qwen2ForCausalLM
+from . import Phi3ForCausalLM, Qwen3ForCausalLM
 
 
 class ModelFactory:
@@ -11,7 +11,7 @@ class ModelFactory:
     MODEL_TYPES = {
         'phi3': Phi3ForCausalLM,
         'phi4': Phi3ForCausalLM,  # Phi-4-mini-instruct uses Phi3 architecture
-        'qwen2': Qwen2ForCausalLM,  # Qwen3 uses Qwen2 architecture
+        'qwen3': Qwen3ForCausalLM,  # Qwen3 uses Qwen2 architecture
     }
 
     @classmethod
@@ -20,11 +20,11 @@ class ModelFactory:
         Create model instance
 
         Args:
-            model_type: 'phi3', 'phi4', or 'qwen2'
+            model_type: 'phi3', 'phi4', or 'qwen3'
             config: Model configuration dict
 
         Returns:
-            Model instance (Phi3ForCausalLM or Qwen2ForCausalLM with mmwave support)
+            Model instance (Phi3ForCausalLM or Qwen3ForCausalLM with mmwave support)
         """
         if model_type not in cls.MODEL_TYPES:
             raise ValueError(f"Unsupported model type: {model_type}")

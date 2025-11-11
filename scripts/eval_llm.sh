@@ -20,7 +20,7 @@ fi
 
 python evaluate_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
-    --config config/llm/phi4.yaml \
+    --config config/llm/qwen3.yaml \
     --data_root ${DATA_ROOT} \
-    --split test_QAs \
+    --split test \
     --batch_size 4 
