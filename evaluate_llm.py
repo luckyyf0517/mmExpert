@@ -47,8 +47,16 @@ def main():
                         help="Batch size for evaluation (overrides config file)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
+    
+    # Local rank argument (automatically set by DeepSpeed launcher)
+    parser.add_argument("--local_rank", type=int, default=None,
+                        help="Local rank for distributed evaluation (set by DeepSpeed launcher)")
 
     args = parser.parse_args()
+    
+    # Set local_rank to environment variable if provided (for DeepSpeed launcher compatibility)
+    if args.local_rank is not None:
+        os.environ['LOCAL_RANK'] = str(args.local_rank)
 
     # Set seeds
     set_global_seed(args.seed)
@@ -97,13 +105,23 @@ def main():
     data_module.setup(stage='test')
 
     # Create trainer for testing
-    trainer = pl.Trainer(
-        accelerator='gpu',
-        devices=1,
-        precision='bf16-mixed',
-        enable_progress_bar=True,
-        default_root_dir=checkpoint_path
-    )
+    # Support distributed evaluation when launched with DeepSpeed
+    # Use DDP strategy for evaluation (no need for DeepSpeed ZeRO optimization)
+    trainer_kwargs = {
+        'accelerator': 'gpu',
+        'devices': "auto",  # Auto-detect from deepspeed launcher
+        'strategy': 'ddp',  # Use DDP for distributed evaluation
+        'precision': 'bf16-mixed',
+        'enable_progress_bar': True,
+        'default_root_dir': checkpoint_path
+    }
+    
+    # If not using DeepSpeed launcher, fall back to single GPU
+    if args.local_rank is None and os.environ.get('WORLD_SIZE') is None:
+        trainer_kwargs['devices'] = 1
+        trainer_kwargs['strategy'] = 'auto'
+    
+    trainer = pl.Trainer(**trainer_kwargs)
 
     # Run test
     log_message("PROGRESS", "Starting evaluation...", color="yellow")

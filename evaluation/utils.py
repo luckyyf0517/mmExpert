@@ -24,16 +24,70 @@ def merge_rank_files(evaluation_dir, pattern="results_rank_*.json"):
     else:
         pattern_path = os.path.join(evaluation_dir, pattern)
 
-    rank_files = glob.glob(pattern_path)
+    rank_files = sorted(glob.glob(pattern_path))
 
     if not rank_files:
         raise FileNotFoundError(f"No files matching {pattern} found in {evaluation_dir} or {ranks_dir}")
 
-    merged_data = {}
-    for rank_file in sorted(rank_files):
+    merged_data = OrderedDict()
+    index_offset = 0
+
+    for rank_file in rank_files:
         print(f"Loading {rank_file}")
         data = json.load(open(rank_file))
-        merged_data.update(data)
+        
+        # First rank file keeps original keys, subsequent ranks reindex
+        for key, value in data.items():
+            if index_offset == 0:
+                # First rank: keep original keys
+                merged_data[key] = value
+            else:
+                # Subsequent ranks: reindex keys by adding offset to original index
+                # Extract base name and number (e.g., "sample" and "0" from "sample_0")
+                if '_' in key:
+                    base_name = key.rsplit('_', 1)[0]
+                    try:
+                        original_num = int(key.rsplit('_', 1)[1])
+                        new_key = f"{base_name}_{original_num + index_offset}"
+                    except ValueError:
+                        # If number extraction fails, find next available index
+                        # This should be rare, so we scan existing keys
+                        max_idx = index_offset - 1
+                        for existing_key in merged_data.keys():
+                            if existing_key.startswith(base_name + '_'):
+                                try:
+                                    idx = int(existing_key.rsplit('_', 1)[1])
+                                    max_idx = max(max_idx, idx)
+                                except ValueError:
+                                    pass
+                        new_key = f"{base_name}_{max_idx + 1}"
+                else:
+                    base_name = key
+                    # Find next available index for base_name
+                    max_idx = index_offset - 1
+                    for existing_key in merged_data.keys():
+                        if existing_key.startswith(base_name + '_'):
+                            try:
+                                idx = int(existing_key.rsplit('_', 1)[1])
+                                max_idx = max(max_idx, idx)
+                            except ValueError:
+                                pass
+                    new_key = f"{base_name}_{max_idx + 1}"
+                
+                merged_data[new_key] = value
+        
+        # After processing each rank file, update offset for next rank file
+        # Find the maximum index in merged_data
+        max_index = -1
+        for key in merged_data.keys():
+            if '_' in key:
+                try:
+                    idx = int(key.rsplit('_', 1)[1])
+                    max_index = max(max_index, idx)
+                except ValueError:
+                    pass
+        if max_index >= 0:
+            index_offset = max_index + 1
 
     print(f"Merged {len(rank_files)} files with total {len(merged_data)} items")
     return merged_data

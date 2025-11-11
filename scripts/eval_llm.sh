@@ -18,9 +18,10 @@ if [ -z "$DATA_ROOT" ]; then
     exit 1
 fi
 
-python evaluate_llm.py \
+deepspeed --include localhost:0,1 --master_port 1234 \
+    evaluate_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
-    --config config/llm/qwen3.yaml \
+    --config config/llm/phi3.yaml \
     --data_root ${DATA_ROOT} \
-    --split test \
-    --batch_size 4 
+    --batch_size 4 \
+    --split test_old 

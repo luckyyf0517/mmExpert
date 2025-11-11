@@ -458,11 +458,11 @@ class WaveLLMTrainer(pl.LightningModule):
         responses = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
         responses = [response.strip() for response in responses]
         
-
-        for i in range(batch_size):
-            question = questions[i]
-            answer = batch['answers'][i]
-            response = responses[i]
-            log_sample_output(question, response, answer, prefix="GENERATE")
+        if _is_rank_0():
+            for i in range(batch_size):
+                question = questions[i]
+                answer = batch['answers'][i]
+                response = responses[i]
+                log_sample_output(question, response, answer, prefix="GENERATE")
         
         return responses
