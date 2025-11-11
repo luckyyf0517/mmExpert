@@ -117,6 +117,9 @@ def worker(local_rank, world_size):
     make_QAs(f'dataset/HumanML3D/_split/test.json', local_rank=local_rank, world_size=world_size)
 
 if __name__ == "__main__":
+    import subprocess
+    import sys
+
     world_size = 10
     processes = []
     for local_rank in range(world_size):
@@ -126,4 +129,26 @@ if __name__ == "__main__":
 
     for p in processes:
         p.join()
+
+    # After all processes complete, run combine_QAs.py to merge results
+    print("\nAll parallel processes completed. Merging results...")
+    try:
+        # Get the directory of make_QAs.py to find combine_QAs.py
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        combine_script = os.path.join(script_dir, 'combine_QAs.py')
+
+        # Run combine_QAs.py
+        result = subprocess.run([sys.executable, combine_script],
+                              capture_output=True, text=True, check=True)
+
+        print("Results merged successfully!")
+        print(result.stdout)
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error combining files: {e}")
+        print(f"Error output: {e.stderr}")
+    except FileNotFoundError:
+        print(f"Error: {combine_script} not found")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
         

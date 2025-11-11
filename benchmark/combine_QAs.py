@@ -29,8 +29,9 @@ def combine_qa_files():
             data = json.load(f)
             combined_data.update(data)
     
-    # Save combined file with same name as folder
-    output_file = os.path.join(qa_dir, f"{SPLIT}_QAs.json")
+    # Save combined file as SPLIT_QAs.json in the parent directory
+    parent_dir = os.path.dirname(qa_dir)
+    output_file = os.path.join(parent_dir, f"{SPLIT}_QAs.json")
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(combined_data, f, indent=2, ensure_ascii=False)
     
