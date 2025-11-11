@@ -2,43 +2,35 @@ import os
 import json
 import httpx
 import re
+import time
+import random
 from typing import Any, List
 from tqdm import tqdm
 from openai import OpenAI
+import openai
 
 
 prompt = (
-    "You are provided with 2 sets of QA about the same action. "
-    "Your task is to evaluate the quality of the QA of the model. "
-    "Identify the key aspects (e.g. categories, temporal orders) of the action. "
-    "The captions will also be provided, to help you judge the correctness. "
-    "Assign correctness points for each distinct correct attribute. Each correct attribute contributes 1 point. If two actions are the same, the score is 2. "
-    "And calculate the percentage of these aspects that are correctly mentioned or partially matched in the model-generated caption." 
-    "Partial correctness should be graded on a scale of 0 to 1 depending on accuracy, with similar concepts considered for partial scores."
-    "Each aspect contributes equally to the final score, with no extra penalties for repeated inaccuracies of the same attribute. "
-    "Also, assign hallucination points for incorrect details in the model output, with 1 point per incorrect attribute. "
-    "Repetitive inaccuracies based on one attribute should incur only a single hallucination point. "
-    "However, if a detail is described uncertainly or speculatively (e.g., using phrases like 'probably for', 'possibly', 'resemble' or 'indicating'), assign fewer or no hallucination points."
-    "Provide your score and a short justification (less than 25 words) in the format of example."
-    "If there are redundant actions, please analyze whether it is reasonable. If it's reasonable or normal, it's not an error."
-    "Note: there is no need to judge left-right. For example, the action is about left, but the caption says right is OK."
-    "You should response in the following format:"
-    "Example1: "
-    "<Input>"
-    "- question: Describe the human motion based on the provided wave signal representing joint movements."
-    "- pred: [a person does a golf swing]"
-    "- gt: [a person is golf putting a ball; a person holds their hands together below their waist and swings their arm; a person grasps something and then does a hitting motion]"
-    "<Output>"
-    "- Correctness: 1 # Correct identification of the action category"
-    "- Hallucination: 0 # No incorrect details"
-    # "Example2: "
-    # "<Input>"
-    # "- question: Describe the human motion based on the provided wave signal representing joint movements."
-    # "- pred: [a person picks something up with their right hand, then bends down and picks something up with their left hand]"
-    # "- gt: [the person is bowing over, a person bows twice, step to the side and back, person is making bowing gestures]"
-    # "<Output>"
-    # "- Correctness: 2 # Correct identification of the action category and temporal order (twice)"
-    # "- Hallucination: 0 # No incorrect details"
+    "You are provided with a question, prediction, and reference answers. "
+    "Your task is to evaluate the quality of the model's prediction. "
+
+    "Evaluation guidelines:"
+    "- Be generous with partial correctness - similar concepts should get credit"
+    "- If prediction mentions the same body part or general action type, award partial points"
+    "- Don't penalize for different but similar descriptions"
+    "- Left-right differences are ignored"
+    "- Uncertain language (e.g., 'probably', 'seems like') reduces hallucination points"
+    "- Focus on the core action, not minor details"
+
+    "Scoring:"
+    "- Correctness: 0-2 points (0=wrong, 1=partially correct, 2=fully correct)"
+    "- Hallucination: 0-2 points (0=no hallucination, 2=major hallucination)"
+
+    "Respond in exactly this format:"
+    "- Correctness: [0-2] # [brief justification]"
+    "- Hallucination: [0-2] # [brief justification]"
+
+    "Keep justifications under 20 words each."
 )
 
 
@@ -100,26 +92,6 @@ def extract_prediction_list(value: Any) -> List[str]:
     return [segment.strip() for segment in segments if segment.strip()]
 
 
-def extract_caption_options(value: Any) -> List[str]:
-    """Extract caption options - now treated as another QA input"""
-    if value is None:
-        return []
-    captions: List[str] = []
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            captions.extend(extract_caption_options(item))
-        return captions
-    text = normalize_text(value)
-    if not text:
-        return []
-    # Handle various separators but also support # for multiple captions
-    if ";" in text:
-        parts = [part.strip() for part in text.split(";")]
-    elif "#" in text:
-        parts = [part.strip() for part in text.split("#")]
-    else:
-        parts = [text]
-    return [part for part in parts if part]
 
 
 def format_as_bullet_list(items: List[str]) -> str:
@@ -129,19 +101,53 @@ def format_as_bullet_list(items: List[str]) -> str:
 
 
 def extract_explanation(response: str) -> str:
-    """Extract only the explanation part from GPT response"""
-    # Look for justification/explanation after the scores
-    explanation_match = re.search(r'# (.+)', response, re.DOTALL)
-    if explanation_match:
-        explanation = explanation_match.group(1).strip()
-        # Remove any remaining score lines
-        explanation = re.sub(r'- (Correctness|Hallucination): \d+ #.*', '', explanation).strip()
-        return explanation
-    return ""
+    """Extract the explanation part from GPT response"""
+    if not response:
+        return ""
+
+    # Extract explanations from the # comments in score lines
+    explanations = []
+
+    # Look for score lines with explanations
+    correctness_match = re.search(r'- Correctness: \d+ # (.+)', response)
+    hallucination_match = re.search(r'- Hallucination: \d+ # (.+)', response)
+
+    if correctness_match:
+        explanations.append(correctness_match.group(1).strip())
+    if hallucination_match:
+        explanations.append(hallucination_match.group(1).strip())
+
+    # If no structured explanations found, extract other content
+    if not explanations:
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Skip score lines without explanations
+            if re.match(r'- (Correctness|Hallucination): \d+$', line):
+                continue
+            # Skip percentage or overall score lines
+            if re.match(r'Overall Score:|Partial Correctness:|.*\d+/\d+.*', line):
+                continue
+            # Skip empty lines and labels
+            if not line or line in ['<Input>', '</Input>', '<Output>', '</Output>']:
+                continue
+            # Keep other content as explanation
+            if line:
+                explanations.append(line)
+
+    # Join explanations
+    explanation = ' '.join(explanations) if explanations else "No explanation provided"
+
+    # Clean up and limit length
+    explanation = explanation.strip('. \n\t')
+    if len(explanation) > 150:
+        explanation = explanation[:150] + "..."
+
+    return explanation
 
 
-def evaluate_single_qa(prediction: str, references: List[str], question: str, client, prompt: str) -> tuple:
-    """Evaluate a single QA pair and return correctness and hallucination scores"""
+def evaluate_single_qa(prediction: str, references: List[str], question: str, client, prompt: str, max_retries: int = 2, initial_delay: float = 1.0) -> tuple:
+    """Evaluate a single QA pair and return correctness and hallucination scores with retry logic"""
     qa_input = (
         "<Input>\n"
         f"- question: {question}\n"
@@ -151,25 +157,46 @@ def evaluate_single_qa(prediction: str, references: List[str], question: str, cl
         "</Input>"
     )
 
-    while True:
-        response_obj = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": qa_input},
-            ],
-        )
-        full_response = response_obj.choices[0].message.content
-        match_correctness = re.search(r'Correctness: (\d+) #', full_response)
-        match_hallucination = re.search(r'Hallucination: (\d+) #', full_response)
-        if match_correctness and match_hallucination:
-            correctness = int(match_correctness.group(1))
-            hallucination = int(match_hallucination.group(1))
-            break
+    retry_count = 0
+    delay = initial_delay
 
-    # Extract only the explanation part
-    explanation = extract_explanation(full_response)
-    return correctness, hallucination, explanation
+    while retry_count <= max_retries:
+        try:
+            response_obj = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": qa_input},
+                ],
+                timeout=30.0  # Add timeout to prevent hanging
+            )
+            full_response = response_obj.choices[0].message.content
+            match_correctness = re.search(r'Correctness: (\d+) #', full_response)
+            match_hallucination = re.search(r'Hallucination: (\d+) #', full_response)
+            if match_correctness and match_hallucination:
+                correctness = int(match_correctness.group(1))
+                hallucination = int(match_hallucination.group(1))
+                # Extract only the explanation part
+                explanation = extract_explanation(full_response)
+                return correctness, hallucination, explanation
+            else:
+                # If response format is incorrect, treat as a failure and retry
+                raise ValueError("Response format validation failed")
+
+        except (httpx.RequestError, openai.APITimeoutError, ValueError) as e:
+            retry_count += 1
+            if retry_count > max_retries:
+                # Return default values on failure
+                return 0, 2, "API call failed"
+
+            # Exponential backoff with jitter
+            jitter = random.uniform(0.8, 1.2)
+            sleep_time = delay * jitter
+            time.sleep(sleep_time)
+            delay *= 2  # Exponential backoff
+
+    # This should never be reached, but just in case
+    return 0, 2, "Unknown error"
 
 
 def evaluate_multiple_predictions(predictions: List[str], references: List[str], question: str, client, prompt: str) -> tuple:
@@ -214,71 +241,64 @@ def evaluate(output_path, local_rank=0, world_size=1):
     savedict = {}
     total_correctness = 0
     total_hallucination = 0
-    total_correctness_cap = 0
-    total_hallucination_cap = 0
+    failed_calls = 0
+    total_calls = 0
     json_to_evaluate = json.load(open(output_path))
     json_to_evaluate = list(json_to_evaluate.items())[local_rank * len(json_to_evaluate) // world_size: (local_rank + 1) * len(json_to_evaluate) // world_size]
-    save_path = os.path.join(os.path.dirname(output_path), f'results_gpt_eval_{local_rank}.json')
+
+    # Create workers directory if it doesn't exist
+    workers_dir = os.path.join(os.path.dirname(output_path), "workers")
+    os.makedirs(workers_dir, exist_ok=True)
+
+    # Save to workers directory with results_worker_*.json naming convention
+    save_path = os.path.join(workers_dir, f'results_worker_{local_rank}.json')
 
     index = 0
     for key, item in tqdm(json_to_evaluate) if local_rank == 0 else json_to_evaluate:
         outdict = item
         question = normalize_text(resolve_field(outdict, ["question"]) or "")
 
-        # Extract caption-related data (treated as QA input)
-        caption_predictions = extract_prediction_list(resolve_field(outdict, ["pred_caption", "prediction_caption"]))
-        caption_references = extract_caption_options(resolve_field(outdict, ["caption", "captions"]))
+        # Extract predictions and references
+        predictions = extract_prediction_list(resolve_field(outdict, ["pred", "prediction", "predictions", "pred_caption", "prediction_caption"]))
+        references = extract_reference_list(resolve_field(outdict, ["gt", "answer", "answers", "caption", "captions"]))  # Already returns list format
 
-        # Extract QA-related data
-        qa_predictions = extract_prediction_list(resolve_field(outdict, ["pred", "prediction", "predictions"]))
-        qa_references = extract_reference_list(resolve_field(outdict, ["gt", "answer", "answers"]))  # Already returns list format
-
-        # Evaluate caption predictions (if available)
-        response_cap = ""
-        correctness_cap = 0
-        hallucination_cap = 0
-
-        if caption_predictions and caption_references:
-            correctness_cap, hallucination_cap, response_cap = evaluate_multiple_predictions(
-                caption_predictions, caption_references, question, client, prompt
-            )
-            total_correctness_cap += correctness_cap
-            total_hallucination_cap += hallucination_cap
-
-        # Evaluate QA predictions (if available)
+        # Evaluate predictions (if available)
         response = ""
         correctness = 0
         hallucination = 0
 
-        if qa_predictions and qa_references:
+        if predictions and references:
             correctness, hallucination, response = evaluate_multiple_predictions(
-                qa_predictions, qa_references, question, client, prompt
+                predictions, references, question, client, prompt
             )
             total_correctness += correctness
             total_hallucination += hallucination
+            total_calls += 1
+            if response == "API call failed":
+                failed_calls += 1
 
         # Save results
         savedict['%06d' % index] = {
             'response': response,
-            'response_cap': response_cap,
             'correctness': correctness,
             'hallucination': hallucination,
-            'correctness_cap': correctness_cap,
-            'hallucination_cap': hallucination_cap,
             'question': question,
-            'qa_predictions': qa_predictions,
-            'qa_references': qa_references,
-            'caption_predictions': caption_predictions,
-            'caption_references': caption_references
+            'predictions': predictions,
+            'references': references
         }
+        # Save to workers directory
         json.dump(savedict, open(save_path, 'w'), indent=2)
         index += 1
+
+    # Optional: Print failure statistics for this worker
+    if failed_calls > 0 and local_rank == 0:
+        print(f"Worker {local_rank}: {failed_calls}/{total_calls} API calls failed")
 
 import multiprocessing as mp
 import argparse
 import glob
 import os
-from utils import merge_rank_files, load_evaluation_data, save_evaluation_results
+from utils import load_evaluation_data, save_evaluation_results
 
 
 if __name__ == "__main__":
@@ -304,132 +324,107 @@ if __name__ == "__main__":
     for p in processes:
         p.join()
 
-    # Step 3: Summarize results
+    # Step 3: Summarize results from workers directory
     print("Step 3: Summarizing results...")
-    files = glob.glob(os.path.join(args.evaluation_dir, 'results_gpt_eval_*.json'))
+    workers_dir = os.path.join(args.evaluation_dir, "workers")
+
+    files = glob.glob(os.path.join(workers_dir, 'results_worker_*.json'))
+    if not files:
+        files = glob.glob(os.path.join(args.evaluation_dir, 'results_gpt_eval_*.json'))
     correctness = []
     hallucination = []
-    correctness_cap = []
-    hallucination_cap = []
     evaluation_details = []
 
     for file in files:
         savedict = json.load(open(file))
         for key, item in savedict.items():
-            # Only include items that have actual evaluation results (skip empty ones)
-            if item.get('response') or item.get('response_cap'):
+            # Only include items that have actual evaluation results
+            if item.get('response'):
                 correctness.append(item['correctness'])
                 hallucination.append(item['hallucination'])
-                correctness_cap.append(item['correctness_cap'])
-                hallucination_cap.append(item['hallucination_cap'])
 
                 # Collect detailed information for analysis
                 evaluation_details.append({
                     'sample_id': key,
                     'question': item.get('question', ''),
-                    'qa_predictions': item.get('qa_predictions', []),
-                    'qa_references': item.get('qa_references', []),
-                    'caption_predictions': item.get('caption_predictions', []),
-                    'caption_references': item.get('caption_references', []),
-                    'scores': {
-                        'qa_correctness': item['correctness'],
-                        'qa_hallucination': item['hallucination'],
-                        'caption_correctness': item['correctness_cap'],
-                        'caption_hallucination': item['hallucination_cap']
-                    }
+                    'predictions': item.get('predictions', []),
+                    'references': item.get('references', []),
+                    'correctness': item['correctness'],
+                    'hallucination': item['hallucination']
                 })
 
     # Calculate totals and precision
     total_correctness = sum(correctness)
     total_hallucination = sum(hallucination)
-    total_correctness_cap = sum(correctness_cap)
-    total_hallucination_cap = sum(hallucination_cap)
 
     precision = total_correctness / (total_correctness + total_hallucination) if (total_correctness + total_hallucination) > 0 else 0
-    precision_cap = total_correctness_cap / (total_correctness_cap + total_hallucination_cap) if (total_correctness_cap + total_hallucination_cap) > 0 else 0
 
     # Additional statistics
     avg_correctness = sum(correctness) / len(correctness) if correctness else 0
     avg_hallucination = sum(hallucination) / len(hallucination) if hallucination else 0
-    avg_correctness_cap = sum(correctness_cap) / len(correctness_cap) if correctness_cap else 0
-    avg_hallucination_cap = sum(hallucination_cap) / len(hallucination_cap) if hallucination_cap else 0
 
-    # Prepare evaluation results with new field structure
+    # Prepare evaluation results
     evaluation_results = []
 
     for detail in evaluation_details:
         # Calculate precision for this sample
-        sample_precision = detail['scores']['qa_correctness'] / (detail['scores']['qa_correctness'] + detail['scores']['qa_hallucination']) if (detail['scores']['qa_correctness'] + detail['scores']['qa_hallucination']) > 0 else 0
+        sample_precision = detail['correctness'] / (detail['correctness'] + detail['hallucination']) if (detail['correctness'] + detail['hallucination']) > 0 else 0
 
         evaluation_results.append({
             'question': detail['question'],
-            'answer': detail['qa_references'],  # List format
-            'prediction': detail['qa_predictions'][0] if detail['qa_predictions'] else '',  # Best prediction
+            'answer': detail['references'],  # List format
+            'prediction': detail['predictions'][0] if detail['predictions'] else '',  # Best prediction
             'response': detail.get('response', ''),  # GPT model explanation only
-            'corr': detail['scores']['qa_correctness'],
-            'halu': detail['scores']['qa_hallucination'],
+            'corr': detail['correctness'],
+            'halu': detail['hallucination'],
             'precise': round(sample_precision, 4)
         })
 
     # Calculate overall statistics
     overall_precision = total_correctness / (total_correctness + total_hallucination) if (total_correctness + total_hallucination) > 0 else 0
-    caption_precision = total_correctness_cap / (total_correctness_cap + total_hallucination_cap) if (total_correctness_cap + total_hallucination_cap) > 0 else 0
 
-    # Prepare final summary with new structure
+    # Prepare final summary
     summary = {
         'total_samples': len(evaluation_results),
-        'qa_stats': {
+        'stats': {
             'total_corr': total_correctness,
             'total_halu': total_hallucination,
             'avg_corr': round(avg_correctness, 2),
             'avg_halu': round(avg_hallucination, 2),
             'precise': round(overall_precision, 4)
         },
-        'caption_stats': {
-            'total_corr': total_correctness_cap,
-            'total_halu': total_hallucination_cap,
-            'avg_corr': round(avg_correctness_cap, 2),
-            'avg_halu': round(avg_hallucination_cap, 2),
-            'precise': round(caption_precision, 4)
-        },
-        'overall_stats': {
-            'total_corr': total_correctness + total_correctness_cap,
-            'total_halu': total_hallucination + total_hallucination_cap,
-            'precise': round((total_correctness + total_correctness_cap) / ((total_correctness + total_hallucination) + (total_correctness_cap + total_hallucination_cap)), 4) if ((total_correctness + total_hallucination) + (total_correctness_cap + total_hallucination_cap)) > 0 else 0
-        },
         'results': evaluation_results
     }
 
-    # Save summary to file
-    summary_file = os.path.join(args.evaluation_dir, "summary_gpt.json")
-    json.dump(summary, open(summary_file, 'w'), indent=2)
+    # Save detailed results using save_evaluation_results
+    detailed_results_file = os.path.join(args.evaluation_dir, "detailed_results_gpt.json")
+    save_evaluation_results({
+        'total_samples': len(evaluation_results),
+        'results': evaluation_results,
+        'detailed_explanations': evaluation_details  # Include full details with explanations
+    }, detailed_results_file)
 
-    # Print results with new field structure
+    # Save summary without detailed results (for quick overview)
+    summary_for_saving = summary.copy()
+    summary_without_results = {k: v for k, v in summary_for_saving.items() if k != 'results'}
+    summary_file = os.path.join(args.evaluation_dir, "summary_gpt.json")
+    save_evaluation_results(summary_without_results, summary_file)
+
+    # Print results
     print("\n" + "="*60)
     print("EVALUATION SUMMARY")
     print("="*60)
     print(f"Total samples: {len(evaluation_results)}")
 
-    print(f"\nQA Evaluation:")
-    print(f"  - Total Corr: {summary['qa_stats']['total_corr']}")
-    print(f"  - Total Halu: {summary['qa_stats']['total_halu']}")
-    print(f"  - Avg Corr: {summary['qa_stats']['avg_corr']}")
-    print(f"  - Avg Halu: {summary['qa_stats']['avg_halu']}")
-    print(f"  - Precision: {summary['qa_stats']['precise']}")
-
-    print(f"\nCaption Evaluation:")
-    print(f"  - Total Corr: {summary['caption_stats']['total_corr']}")
-    print(f"  - Total Halu: {summary['caption_stats']['total_halu']}")
-    print(f"  - Avg Corr: {summary['caption_stats']['avg_corr']}")
-    print(f"  - Avg Halu: {summary['caption_stats']['avg_halu']}")
-    print(f"  - Precision: {summary['caption_stats']['precise']}")
-
-    print(f"\nOverall Performance:")
-    print(f"  - Total Corr: {summary['overall_stats']['total_corr']}")
-    print(f"  - Total Halu: {summary['overall_stats']['total_halu']}")
-    print(f"  - Precision: {summary['overall_stats']['precise']}")
+    print(f"\nEvaluation Results:")
+    print(f"  - Total Corr: {summary['stats']['total_corr']}")
+    print(f"  - Total Halu: {summary['stats']['total_halu']}")
+    print(f"  - Avg Corr: {summary['stats']['avg_corr']}")
+    print(f"  - Avg Halu: {summary['stats']['avg_halu']}")
+    print(f"  - Precision: {summary['stats']['precise']}")
 
     print(f"\nEvaluation completed successfully!")
-    print(f"Results saved to: {summary_file}")
+    print(f"Detailed results saved to: {detailed_results_file}")
+    print(f"Summary saved to: {summary_file}")
     print("="*60)
         
