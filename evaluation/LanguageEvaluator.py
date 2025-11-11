@@ -37,7 +37,7 @@ class Evaluator():
         self.directory_path = directory_path
         # Set cache directory for offline mode
         cache_dir = "/root/autodl-tmp/mmExpert/huggingface"
-        
+
         self.simcse_tokenizer = AutoTokenizer.from_pretrained(
             "princeton-nlp/sup-simcse-roberta-large",
             cache_dir=cache_dir,
@@ -81,7 +81,10 @@ class Evaluator():
         for scorer, method in scorers:
             if verbose:
                 print('computing %s score...' % (scorer.method()))
-            score, scores = scorer.compute_score(ref_coco, hypo_coco)
+            if hasattr(scorer, 'method') and scorer.method() == "Bleu":
+                score, scores = scorer.compute_score(ref_coco, hypo_coco, verbose=0)
+            else:
+                score, scores = scorer.compute_score(ref_coco, hypo_coco)
             if type(score) == list:
                 for m, s in zip(method, score):
                     final_scores[m] = s
@@ -332,7 +335,10 @@ class Evaluator():
                 # Evaluate against each ground truth text
                 for gt_tokenized_text in gt_tokenized:
                     gt_coco = {sample_id: [gt_tokenized_text]}
-                    score, _ = scorer.compute_score(gt_coco, pred_coco)
+                    if hasattr(scorer, 'method') and scorer.method() == "Bleu":
+                        score, _ = scorer.compute_score(gt_coco, pred_coco, verbose=0)
+                    else:
+                        score, _ = scorer.compute_score(gt_coco, pred_coco)
                     
                     if isinstance(score, list):
                         # For metrics like BLEU that return multiple scores

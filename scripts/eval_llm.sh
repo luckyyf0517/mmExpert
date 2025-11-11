@@ -21,7 +21,7 @@ fi
 deepspeed --include localhost:0,1 --master_port 1234 \
     evaluate_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
-    --config config/llm/phi3.yaml \
+    --config config/llm/qwen3.yaml \
     --data_root ${DATA_ROOT} \
     --batch_size 4 \
     --split test_old 
