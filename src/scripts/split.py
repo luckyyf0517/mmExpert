@@ -8,8 +8,8 @@ from tqdm import tqdm
 # Constants
 DATASETS = ['HumanML3D']
 SAVE_DIR = 'dataset/HumanML3D/_split'
-MIN_MOTION_LEN = 96  # From DEFAULT_RADAR_OPT
-MAX_MOTION_LEN = 496  # From DEFAULT_RADAR_OPT
+MIN_MOTION_LEN = 100  # From DEFAULT_RADAR_OPT
+MAX_MOTION_LEN = 500  # From DEFAULT_RADAR_OPT
 TRAIN_VAL_SPLIT_RATIO = 10  # Every 10th file goes to validation
 
 def collect_file_paths(datasets):

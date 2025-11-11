@@ -21,4 +21,4 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --gradient_accumulation_steps 2 \
     --zero_stage 2 \
     --dtype bf16 \
-    --split train_QAs
+    --split train

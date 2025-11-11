@@ -27,6 +27,7 @@ import copy
 
 from sentence_transformers import SentenceTransformer, util
 from transformers import AutoModel, AutoTokenizer
+from utils import load_evaluation_data, extract_field_safely, save_evaluation_results
 
 class Evaluator():
     def __init__(self,directory_path,eval_bs) -> None:
@@ -96,8 +97,8 @@ class Evaluator():
         data = re.sub('^[ ]+' ,'', data)
         data = re.sub(' {2,}', ' ', data)
 
-        data = re.sub('\.[ ]{2,}', '. ', data)
-        data = re.sub('[^a-zA-Z0-9,\'\s\-:]+', '', data)
+        data = re.sub(r'\.[ ]{2,}', '. ', data)
+        data = re.sub(r'[^a-zA-Z0-9,\'\s\-:]+', '', data)
         data = re.sub('ç' ,'c', data)
         data = re.sub('’' ,'\'', data)
         data = re.sub(r'\bletf\b' ,'left', data)
@@ -370,11 +371,8 @@ class Evaluator():
         all_simcse_similarity = []
         all_sbert_similarity = []
 
-        # all_pred_files = glob(osp.join(self.directory_path,"*.json"))
-        all_pred_files = [self.directory_path]
-        for filename in all_pred_files:
-            with open(filename, 'r') as file:
-                all_pred.update(json.load(file))
+        # Load evaluation data using the unified function
+        all_pred = load_evaluation_data(self.directory_path, merged_filename="results.json")
         bar = tqdm(all_pred)
 
         batch_lan_pred = []
@@ -449,26 +447,65 @@ class Evaluator():
 
         print(f"simcse (best):     {sum(all_simcse_similarity)/len(all_simcse_similarity)}")
         print(f"sbert (best):      {sum(all_sbert_similarity)/len(all_sbert_similarity)}")
+
+        # Return evaluation results for saving
+        return {
+            'total_samples': len(EM_best),
+            'exact_match': {
+                'em_best': sum(EM_best)/len(EM_best),
+                'em_refined_best': sum(EM_refine_best)/len(EM_refine_best)
+            },
+            'similarity_metrics': {
+                'simcse_best': sum(all_simcse_similarity)/len(all_simcse_similarity),
+                'sbert_best': sum(all_sbert_similarity)/len(all_sbert_similarity)
+            },
+            'detailed_scores': {
+                'em_best': EM_best,
+                'em_refined_best': EM_refine_best,
+                'simcse_scores': all_simcse_similarity,
+                'sbert_scores': all_sbert_similarity
+            }
+        }
     
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Process some integers.')
-    parser.add_argument('--directory_path', type=str, help='path to json files')
+    parser = argparse.ArgumentParser(description='Language evaluation for motion descriptions')
+    parser.add_argument('--evaluation_dir', type=str,
+                       help='Path to evaluation directory containing results_rank_*.json files')
+    parser.add_argument('--directory_path', type=str,
+                       help='Path to directory or single JSON file (deprecated, use --evaluation_dir)')
     parser.add_argument('--eval_bs', type=int, default=100, help='evaluation batch size')
 
     args = parser.parse_args()
-    directory_path = args.directory_path
-    eval_bs = args.eval_bs
-    
-    print(f"evaluating files under {directory_path} ...")
+
+    # Handle both old and new parameter names
+    if args.evaluation_dir:
+        input_path = args.evaluation_dir
+    elif args.directory_path:
+        input_path = args.directory_path
+    else:
+        parser.error("Either --evaluation_dir or --directory_path must be provided")
+
+    print(f"Running language evaluation for {input_path} ...")
 
     eval = Evaluator(
-        directory_path=directory_path,
-        eval_bs=eval_bs
+        directory_path=input_path,
+        eval_bs=args.eval_bs
     )
-    eval.load_data_and_eval(max_length=1024)
+    results = eval.load_data_and_eval(max_length=1024)
+
+    # Save evaluation results
+    if os.path.isdir(input_path):
+        output_file = os.path.join(input_path, "language_evaluation_summary.json")
+    else:
+        # For single file input, save in same directory
+        output_file = os.path.join(os.path.dirname(input_path), "language_evaluation_summary.json")
+
+    save_evaluation_results(results, output_file)
+    print(f"\nLanguage evaluation completed successfully!")
+    print(f"Results saved to: {output_file}")
 
 
         

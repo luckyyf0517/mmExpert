@@ -1,38 +1,52 @@
 import os
 import json
+import glob
 import numpy as np
 import codecs as cs
 from tqdm import tqdm
 
 # Constants
+DATASETS = ['HumanML3D']
 SAVE_DIR = 'dataset/HumanML3D/_split'
-REQUIRED_POSTFIX = 'A' 
-MIN_MOTION_LEN = 100
-MAX_MOTION_LEN = 500
+MIN_MOTION_LEN = 100  # From DEFAULT_RADAR_OPT
+MAX_MOTION_LEN = 500  # From DEFAULT_RADAR_OPT
+
+def collect_file_paths(datasets):
+    """Collect all NPZ file paths from specified datasets."""
+    all_filelist = []
+    for dataset_name in datasets:
+        # Look for NPZ files (mmwave format for HumanML3D)
+        filelist = sorted(glob.glob(f'dataset/{dataset_name}/mmwave/*.npz'))
+        print(f'Found {len(filelist)} NPZ files in {dataset_name}')
+        all_filelist += filelist
+    return all_filelist
 
 def get_text_filename(motion_filename):
-    """Convert motion filename to corresponding text filename."""
-    textname = motion_filename.replace('udoppler', 'texts').replace('.npy', '.txt')
-    # Remove the postfix (e.g., 'A' from filename)
-    textname = textname[:-5] + textname[-4:]
+    """Convert radar filename to corresponding text filename."""
+    textname = motion_filename.replace('mmwave', 'texts').replace('.npz', '.txt')
     return textname
 
-def is_valid_motion(filename):
-    """Check if motion file has required postfix."""
-    return REQUIRED_POSTFIX in filename
+def validate_radar_data(radar_data):
+    """Validate radar data for length and data quality."""
+    # Check time dimension length for all views
+    range_T = radar_data['range_time'].shape[1]
+    doppler_T = radar_data['doppler_time'].shape[1]
+    azimuth_T = radar_data['azimuth_time'].shape[1]
 
-def validate_motion_data(motion):
-    """Validate motion data for length and data quality."""
-    motion_len = motion.shape[0]
-    
+    # All views should have same time dimension
+    if not (range_T == doppler_T == azimuth_T):
+        return False
+
     # Check length constraints
-    if motion_len < MIN_MOTION_LEN or motion_len >= MAX_MOTION_LEN:
+    if range_T < MIN_MOTION_LEN or range_T >= MAX_MOTION_LEN:
         return False
-    
-    # Check for invalid data (NaN or Inf)
-    if np.isnan(motion).sum() > 0 or np.isinf(motion).sum() > 0:
-        return False
-    
+
+    # Check for invalid data (NaN or Inf) in all views
+    for view_name, view_data in radar_data.items():
+        if view_name in ['range_time', 'doppler_time', 'azimuth_time']:
+            if np.isnan(view_data).sum() > 0 or np.isinf(view_data).sum() > 0:
+                return False
+
     return True
 
 def process_text_file(text_filename):
@@ -51,87 +65,83 @@ def process_text_file(text_filename):
     except Exception as e:
         print(f"Warning: Could not read text file {text_filename}: {e}")
         return []
-    
+
     return captions
 
-def process_motion_file(filename):
-    """Process a single motion file and return data dictionary entry."""
-    if not is_valid_motion(filename):
-        return None
-    
+def process_radar_file(filename):
+    """Process a single radar NPZ file and return data dictionary entry."""
     text_filename = get_text_filename(filename)
     if not os.path.exists(text_filename):
         print(f"Warning: Text file {text_filename} not found")
         return None
-    
-    # Load and validate motion data
+
+    # Load and validate radar data
     try:
-        motion = np.load(filename)
-        if not validate_motion_data(motion):
+        radar_data = np.load(filename)
+        if not validate_radar_data(radar_data):
             return None
     except Exception as e:
-        print(f"Warning: Could not load motion file {filename}: {e}")
+        print(f"Warning: Could not load radar file {filename}: {e}")
         return None
-    
+
     # Process text captions
     captions = process_text_file(text_filename)
     if not captions:
         return None
-    
+
     file_index = text_filename.split('/')[-1].split('.')[0]
     file_folder = os.path.dirname(filename)
-    
+
     return {
         'filefolder': file_folder,
         'fileindex': file_index,
         'captions': captions
     }
 
-def load_file_list(txt_file):
-    """Load file list from txt file, filtering out M-prefixed files."""
-    file_list = []
+def load_split_files():
+    """Load train and test split files from HumanML3D dataset."""
+    train_files = set()
+    test_files = set()
+
     try:
-        with open(txt_file, 'r') as f:
+        with open('dataset/HumanML3D/train.txt', 'r') as f:
             for line in f:
-                line = line.strip()
-                if line and not line.startswith('M'):
-                    file_list.append(line)
+                file_id = line.strip()
+                if file_id:
+                    train_files.add(file_id)
+        print(f'Loaded {len(train_files)} files from train.txt')
     except Exception as e:
-        print(f"Error reading {txt_file}: {e}")
-        return []
-    
-    return file_list
+        print(f"Error loading train.txt: {e}")
 
-def check_file_exists(file_id):
-    """Check if both motion and text files exist for given file ID."""
-    motion_file = f'dataset/HumanML3D/udoppler/{file_id}A.npy'
-    text_file = f'dataset/HumanML3D/texts/{file_id}.txt'
-    
-    return os.path.exists(motion_file) and os.path.exists(text_file)
+    try:
+        with open('dataset/HumanML3D/test.txt', 'r') as f:
+            for line in f:
+                file_id = line.strip()
+                if file_id:
+                    test_files.add(file_id)
+        print(f'Loaded {len(test_files)} files from test.txt')
+    except Exception as e:
+        print(f"Error loading test.txt: {e}")
 
-def process_file_list(file_list, split_name):
-    """Process a list of file IDs and return data dictionary."""
-    data_dict = {}
-    valid_count = 0
-    missing_count = 0
-    
-    print(f"Processing {split_name} files...")
-    
-    for file_id in tqdm(file_list, desc=f"Processing {split_name}"):
-        # Check if files exist
-        if not check_file_exists(file_id):
-            missing_count += 1
-            continue
-        
-        motion_file = f'dataset/HumanML3D/udoppler/{file_id}A.npy'
-        result = process_motion_file(motion_file)
-        
-        if result is not None:
-            data_dict[f'{valid_count:06d}'] = result
-            valid_count += 1
-    
-    print(f"{split_name}: {valid_count} valid files, {missing_count} missing files")
-    return data_dict
+    return train_files, test_files
+
+def split_data(data_dict):
+    """Split data into train and test sets based on HumanML3D predefined splits."""
+    train_files, test_files = load_split_files()
+
+    train_dict = {}
+    test_dict = {}
+
+    for key, value in data_dict.items():
+        file_index = value['fileindex']
+        if file_index in train_files:
+            train_dict[key] = value
+        elif file_index in test_files:
+            test_dict[key] = value
+        else:
+            print(f"Warning: File {file_index} not found in train.txt or test.txt")
+
+    return train_dict, test_dict
 
 def save_json_formatted(data, filepath):
     """Save data to JSON file with proper formatting."""
@@ -140,36 +150,38 @@ def save_json_formatted(data, filepath):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 def main():
-    """Main function to process datasets and create splits."""
-    print("Starting HumanML3D dataset processing...")
-    
-    # Load file lists
-    train_val_list = load_file_list('dataset/HumanML3D/train_val.txt')
-    test_list = load_file_list('dataset/HumanML3D/test.txt')
-    
-    print(f'Loaded {len(train_val_list)} files from train_val.txt')
-    print(f'Loaded {len(test_list)} files from test.txt')
-    
-    # Process train files
-    train_dict = process_file_list(train_val_list, "Train")
-    
-    # Process val/test files
-    val_dict = process_file_list(test_list, "Val/Test")
-    
+    """Main function to process radar datasets and create splits."""
+    print("Starting HumanML3D radar dataset processing...")
+
+    # Collect all NPZ file paths
+    all_filelist = collect_file_paths(DATASETS)
+    print(f'Total {len(all_filelist)} NPZ files to process')
+
+    # Process files
+    data_dict = {}
+    index = 0
+
+    for filename in tqdm(all_filelist, desc="Processing radar files"):
+        result = process_radar_file(filename)
+        if result is not None:
+            data_dict[f'{index:06d}'] = result
+            index += 1
+
+    print(f'Successfully processed {len(data_dict)} radar files')
+
+    # Split data
+    train_dict, test_dict = split_data(data_dict)
     print(f'Train set: {len(train_dict)} files')
-    print(f'Validation/Test set: {len(val_dict)} files')
-    
+    print(f'Test set: {len(test_dict)} files')
+
     # Save formatted JSON files
     print(f'Saving files to {SAVE_DIR}...')
     save_json_formatted(train_dict, f'{SAVE_DIR}/train.json')
-    save_json_formatted(val_dict, f'{SAVE_DIR}/val.json')
-    save_json_formatted(val_dict, f'{SAVE_DIR}/test.json')
-    
-    # Create combined all.json
-    all_dict = {**train_dict, **{f'val_{k}': v for k, v in val_dict.items()}}
-    save_json_formatted(all_dict, f'{SAVE_DIR}/all.json')
-    
-    print('Dataset processing completed successfully!')
+    save_json_formatted(test_dict, f'{SAVE_DIR}/val.json')
+    save_json_formatted(test_dict, f'{SAVE_DIR}/test.json')
+    save_json_formatted(data_dict, f'{SAVE_DIR}/all.json')
+
+    print('HumanML3D radar dataset processing completed successfully!')
 
 if __name__ == "__main__":
     main()

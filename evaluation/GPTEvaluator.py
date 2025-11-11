@@ -280,24 +280,7 @@ import multiprocessing as mp
 import argparse
 import glob
 import os
-
-
-def merge_rank_files(evaluation_dir):
-    """Merge all results_rank_*.json files in the evaluation directory"""
-    pattern = os.path.join(evaluation_dir, "results_rank_*.json")
-    rank_files = glob.glob(pattern)
-
-    if not rank_files:
-        raise FileNotFoundError(f"No results_rank_*.json files found in {evaluation_dir}")
-
-    merged_data = {}
-    for rank_file in sorted(rank_files):
-        print(f"Loading {rank_file}")
-        data = json.load(open(rank_file))
-        merged_data.update(data)
-
-    print(f"Merged {len(rank_files)} files with total {len(merged_data)} items")
-    return merged_data
+from utils import merge_rank_files, load_evaluation_data, save_evaluation_results
 
 
 if __name__ == "__main__":
@@ -308,18 +291,9 @@ if __name__ == "__main__":
                        help='Number of parallel processes for evaluation')
     args = parser.parse_args()
 
-    # Create output path for merged data
+    # Step 1: Load and merge all rank files
     merged_file = os.path.join(args.evaluation_dir, "results.json")
-
-    # Step 1: Merge all rank files
-    if not os.path.exists(merged_file):
-        print("Step 1: Merging rank files...")
-        merged_data = merge_rank_files(args.evaluation_dir)
-        json.dump(merged_data, open(merged_file, 'w'), indent=2)
-        print(f"Data merged and saved to {merged_file}")
-    else:
-        print(f"Merged file {merged_file} already exists, skipping merge step")
-        merged_data = json.load(open(merged_file))
+    merged_data = load_evaluation_data(args.evaluation_dir, merged_filename="results.json")
 
     # Step 2: Run evaluation
     print("Step 2: Running GPT evaluation...")
