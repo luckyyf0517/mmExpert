@@ -1,27 +1,13 @@
 #!/bin/bash
 
-# Evaluation script for fine-tuning Phi3 with mmwave features
-# Usage: bash scripts/eval_llm.sh path/to/checkpoint.ckpt data_root
-
-DATA_ROOT=$1
-MODEL_CHECKPOINT=$2
-
-if [ -z "$MODEL_CHECKPOINT" ]; then
-    echo -e "\033[31m[ERROR]\033[0m Error: Model checkpoint path is required"
-    echo "Usage: bash scripts/eval_llm.sh path/to/checkpoint.ckpt data_root"
-    exit 1
-fi
-
-if [ -z "$DATA_ROOT" ]; then
-    echo -e "\033[31m[ERROR]\033[0m Error: data_root is required"
-    echo "Usage: bash scripts/eval_llm.sh path/to/checkpoint.ckpt data_root"
-    exit 1
-fi
+CONFIG=$1
+DATA_ROOT=$2
+MODEL_CHECKPOINT=$3
 
 deepspeed --include localhost:0,1 --master_port 1234 \
     evaluate_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
-    --config config/llm/qwen3.yaml \
+    --config ${CONFIG} \
     --data_root ${DATA_ROOT} \
     --batch_size 4 \
-    --split test_old 
+    --split test 

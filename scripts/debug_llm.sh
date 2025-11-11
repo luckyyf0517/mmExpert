@@ -5,11 +5,11 @@
 # Mimics training flow with bf16-mixed precision
 # Usage: bash tmp/debug.sh DATA_ROOT MODEL_CHECKPOINT [MAX_STEPS]
 
-DATA_ROOT=$1
-MODEL_CHECKPOINT=$2
-MAX_STEPS=${3:-10}
+CONFIG=$1
+DATA_ROOT=$2
+MODEL_CHECKPOINT=$3
+MAX_STEPS=${4:-10}
 BATCH_SIZE=1
-
 
 echo -e "\033[32m[INFO]\033[0m Testing checkpoint on TRAINING dataset"
 echo -e "\033[32m[INFO]\033[0m Checkpoint: ${MODEL_CHECKPOINT}"

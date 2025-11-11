@@ -47,7 +47,29 @@ def main():
                         help="Batch size for evaluation (overrides config file)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
-    
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Custom output directory for evaluation results (default: evaluation)")
+
+    # Generate parameters
+    parser.add_argument("--temperature", type=float, default=1.0,
+                        help="Temperature for sampling (default: 1.0)")
+    parser.add_argument("--top_k", type=int, default=50,
+                        help="Top-K for sampling (default: 50)")
+    parser.add_argument("--top_p", type=float, default=0.95,
+                        help="Top-P for sampling (default: 0.95)")
+    parser.add_argument("--num_beams", type=int, default=4,
+                        help="Number of beams for beam search (default: 4)")
+    parser.add_argument("--max_new_tokens", type=int, default=30,
+                        help="Maximum number of new tokens to generate (default: 30)")
+    parser.add_argument("--length_penalty", type=float, default=1.0,
+                        help="Length penalty for beam search (default: 1.0)")
+    parser.add_argument("--repetition_penalty", type=float, default=1.0,
+                        help="Repetition penalty (default: 1.0)")
+    parser.add_argument("--do_sample", action="store_true", default=True,
+                        help="Whether to use sampling (default: True)")
+    parser.add_argument("--early_stopping", action="store_true", default=False,
+                        help="Whether to use early stopping in beam search (default: False)")
+
     # Local rank argument (automatically set by DeepSpeed launcher)
     parser.add_argument("--local_rank", type=int, default=None,
                         help="Local rank for distributed evaluation (set by DeepSpeed launcher)")
@@ -88,11 +110,48 @@ def main():
             log_message("CONFIG", f"Split '{args.split}' doesn't contain 'QA', setting caption_only=True", color="blue")
     if args.batch_size is not None:
         override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
+
+    # Add generate parameters to config
+    cfg.generation = EasyDict({
+        'temperature': args.temperature,
+        'top_k': args.top_k,
+        'top_p': args.top_p,
+        'num_beams': args.num_beams,
+        'max_new_tokens': args.max_new_tokens,
+        'length_penalty': args.length_penalty,
+        'repetition_penalty': args.repetition_penalty,
+        'do_sample': args.do_sample,
+        'early_stopping': args.early_stopping,
+    })
+
+    # Log generation parameters
+    log_message("CONFIG", f"Generation parameters:", color="blue")
+    log_message("CONFIG", f"  temperature: {cfg.generation.temperature}", color="blue")
+    log_message("CONFIG", f"  top_k: {cfg.generation.top_k}", color="blue")
+    log_message("CONFIG", f"  top_p: {cfg.generation.top_p}", color="blue")
+    log_message("CONFIG", f"  num_beams: {cfg.generation.num_beams}", color="blue")
+    log_message("CONFIG", f"  max_new_tokens: {cfg.generation.max_new_tokens}", color="blue")
+    log_message("CONFIG", f"  length_penalty: {cfg.generation.length_penalty}", color="blue")
+    log_message("CONFIG", f"  repetition_penalty: {cfg.generation.repetition_penalty}", color="blue")
+    log_message("CONFIG", f"  do_sample: {cfg.generation.do_sample}", color="blue")
+    log_message("CONFIG", f"  early_stopping: {cfg.generation.early_stopping}", color="blue")
     
     # Set default batch_size if not in config
     if not hasattr(cfg.data_cfg, 'batch_size') or cfg.data_cfg.batch_size is None:
         cfg.data_cfg.batch_size = 4  # Default batch size for evaluation
         log_message("CONFIG", f"Using default batch_size: {cfg.data_cfg.batch_size}", color="blue")
+
+    # Set output directory
+    if args.output_dir is not None:
+        cfg.evaluation_dir = args.output_dir
+        log_message("CONFIG", f"Using custom evaluation directory: {cfg.evaluation_dir}", color="blue")
+    else:
+        cfg.evaluation_dir = "evaluation"
+        log_message("CONFIG", f"Using default evaluation directory: {cfg.evaluation_dir}", color="blue")
+
+    # CRITICAL: Ensure the model uses the updated config
+    model.cfg = cfg
+    log_message("CONFIG", f"Model cfg updated with evaluation_dir: {cfg.evaluation_dir}", color="blue")
 
     # Load dataset using DataModule (same as training)
     log_message("LOAD", f"Loading dataset from {cfg.data_cfg.data_root}", color="cyan")

@@ -338,31 +338,35 @@ class WaveLLMTrainer(pl.LightningModule):
         """Initialize result JSON file at the start of test epoch"""
         import os
         import json
-        
+
         # Get output file path from trainer or use default
         if hasattr(self.trainer, 'default_root_dir') and self.trainer.default_root_dir:
             checkpoint_dir = self.trainer.default_root_dir
         else:
             checkpoint_dir = getattr(self.cfg, 'log_dir', 'output')
-        
+
+        # Get custom evaluation directory if specified
+        eval_output_dir = getattr(self.cfg, 'evaluation_dir', 'evaluation')
+
         # Create evaluation directory
-        eval_dir = os.path.join(checkpoint_dir, "evaluation/ranks")
+        eval_dir = os.path.join(checkpoint_dir, f"{eval_output_dir}/ranks")
         os.makedirs(eval_dir, exist_ok=True)
-        
+
         # Get rank for distributed training
         try:
             import torch.distributed as dist
             rank = dist.get_rank() if dist.is_initialized() else 0
         except:
             rank = 0
-        
+
         self.output_file = os.path.join(eval_dir, f"results_rank_{rank}.json")
-        
+
         # Initialize empty results file
         with open(self.output_file, 'w', encoding='utf-8') as f:
             json.dump({}, f, indent=2, ensure_ascii=False)
-        
+
         log_message("INFO", f"Initializing result file: {self.output_file}", color="green")
+        log_message("INFO", f"Evaluation output directory: {os.path.join(checkpoint_dir, eval_output_dir)}", color="green")
         
     def test_step(self, batch, batch_idx):
         """Generate predictions and save to JSON file"""
@@ -427,7 +431,23 @@ class WaveLLMTrainer(pl.LightningModule):
         # Use input_ids that are already formatted for inference (when is_inference=True)
         input_ids = batch['input_ids'].to(device)
         attention_mask_batch = batch['attention_mask'].to(device)
-        
+
+        # Get generation parameters from config or use defaults
+        gen_cfg = getattr(self.cfg, 'generation', {})
+
+        # Default generation parameters
+        generation_params = {
+            'do_sample': gen_cfg.get('do_sample', True),
+            'temperature': gen_cfg.get('temperature', 1.0),
+            'top_k': gen_cfg.get('top_k', 50),
+            'top_p': gen_cfg.get('top_p', 0.95),
+            'num_beams': gen_cfg.get('num_beams', 4),
+            'max_new_tokens': gen_cfg.get('max_new_tokens', 30),
+            'length_penalty': gen_cfg.get('length_penalty', 1.0),
+            'repetition_penalty': gen_cfg.get('repetition_penalty', 1.0),
+            'early_stopping': gen_cfg.get('early_stopping', False),
+        }
+
         # Generate for entire batch at once
         self.model.eval()
 
@@ -437,12 +457,7 @@ class WaveLLMTrainer(pl.LightningModule):
                     input_ids,
                     input_wave_embeds=mmwave_embeds,
                     attention_mask=attention_mask_batch,
-                    do_sample=True,
-                    temperature=1.0,
-                    top_k=50,
-                    num_beams=4,
-                    max_new_tokens=30,
-                    top_p=0.95,
+                    **generation_params
                 )
         
         input_token_len = input_ids.shape[1]

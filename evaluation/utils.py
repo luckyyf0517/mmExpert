@@ -107,20 +107,14 @@ def load_evaluation_data(input_path, merged_filename="results.json", pattern="re
     all_data = None
 
     if os.path.isdir(input_path):
-        # If it's a directory, merge rank files first
+        # If it's a directory, always merge rank files
         merged_file = os.path.join(input_path, merged_filename)
-        if not os.path.exists(merged_file):
-            print(f"Step 1: Merging rank files in {input_path}...")
-            all_data = merge_rank_files(input_path, pattern)
-            # Preprocess the data in memory AND save it
-            all_data = preprocess_answer_fields(all_data)
-            save_evaluation_results(all_data, merged_file, preprocess_answers=False)
-            print(f"Data merged and saved to {merged_file}")
-        else:
-            print(f"Using existing merged file: {merged_file}")
-            all_data = json.load(open(merged_file))
-            # Preprocess answer fields to split # delimited answers into lists
-            all_data = preprocess_answer_fields(all_data)
+        print(f"Step 1: Merging rank files in {input_path}...")
+        all_data = merge_rank_files(input_path, pattern)
+        # Preprocess the data in memory AND save it
+        all_data = preprocess_answer_fields(all_data)
+        save_evaluation_results(all_data, merged_file, preprocess_answers=False)
+        print(f"Data merged and saved to {merged_file}")
     else:
         # If it's a single file, load directly
         print(f"Loading data from single file: {input_path}")
