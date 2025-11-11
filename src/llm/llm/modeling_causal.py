@@ -72,7 +72,7 @@ def create_wave_causal_lm(BaseForCausalLMClass, BaseModelClass=None):
     
     Args:
         BaseForCausalLMClass: The base ForCausalLM class from transformers 
-                             (e.g., Phi3ForCausalLM, Qwen2ForCausalLM)
+                             (e.g., Phi3ForCausalLM, Qwen3ForCausalLM)
         BaseModelClass: Optional base model class. If not provided, will try to 
                        infer from BaseForCausalLMClass.base_model_class
     
@@ -99,8 +99,19 @@ def create_wave_causal_lm(BaseForCausalLMClass, BaseModelClass=None):
         
         def __init__(self, config, **kwargs):
             super().__init__(config, **kwargs)
+            # Store original model weights before replacement
+            original_model_state = self.model.state_dict()
             # Replace self.model with our wave-enabled model
             self.model = WaveModelClass(config)
+            # Copy weights from original model to wave-enabled model
+            # Use strict=False to ignore missing keys (e.g., bias parameters that don't exist in pretrained weights)
+            missing_keys, unexpected_keys = self.model.load_state_dict(original_model_state, strict=False)
+            if missing_keys:
+                log_message = colored("[WARNING]", "yellow") + f" Missing keys when copying model weights: {len(missing_keys)} keys"
+                print(log_message)
+            if unexpected_keys:
+                log_message = colored("[WARNING]", "yellow") + f" Unexpected keys when copying model weights: {len(unexpected_keys)} keys"
+                print(log_message)
             self.post_init()
             
             # mm_projection_layers will be initialized later via initialize_wave_projection()
@@ -122,13 +133,24 @@ def create_wave_causal_lm(BaseForCausalLMClass, BaseModelClass=None):
         
         def prepare_inputs_for_generation(
             self,
-            input_wave_embeds: torch.Tensor = None,
+            input_ids: torch.LongTensor = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
             **kwargs,
         ):
-            """Prepare inputs for generation, pass through input_wave_embeds"""
-            model_inputs = super().prepare_inputs_for_generation(**kwargs)
+            """Prepare inputs for generation, handle wave features from kwargs"""
+            # Extract input_wave_embeds from kwargs to avoid conflicts
+            input_wave_embeds = kwargs.pop('input_wave_embeds', None)
 
-            # Pass through input_wave_embeds to forward
+            # Prepare inputs using parent method
+            model_inputs = super().prepare_inputs_for_generation(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                inputs_embeds=inputs_embeds,
+                **kwargs
+            )
+
+            # Add wave features back to model inputs if present
             if input_wave_embeds is not None:
                 model_inputs["input_wave_embeds"] = input_wave_embeds
 
