@@ -130,13 +130,10 @@ class WaveCaptionDataset(Dataset):
             caption_qas = self._generate_caption_qas(data[i])
             
             if 'train' in self.split:
-                # assign caption QA to each data item
-                data_items_caption = self._create_data_items(data[i], {'question': None, 'answer': ''})
-                for data_item in data_items_caption:
-                    qa = random.choice(caption_qas)
-                    data_item['question'] = qa['question']
-                    data_item['answer'] = qa['answer']
-                processed_data.extend(data_items_caption)
+                # assign all caption QAs to data items (not random selection)
+                for qa in caption_qas:
+                    data_items_caption = self._create_data_items(data[i], qa)
+                    processed_data.extend(data_items_caption)
                 # assign question QA to each data item (only if question_qas is not empty)
                 if question_qas:
                     data_items = self._create_data_items(data[i], {'question': None, 'answer': ''})
