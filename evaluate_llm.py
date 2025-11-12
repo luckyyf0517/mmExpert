@@ -105,11 +105,22 @@ def main():
 
     # Override config with command line arguments
     if args.split is not None:
-        cfg.data_cfg.test_split = args.split
-        # If split doesn't contain "QA", set caption_only to true
-        if "QA" not in args.split:
-            override_config(cfg.data_cfg, 'caption_only', True, 'caption_only')
-            log_message("CONFIG", f"Split '{args.split}' doesn't contain 'QA', setting caption_only=True", color="blue")
+        # Parse comma-separated split files into list
+        if ',' in args.split:
+            split_list = args.split.split(',')
+            cfg.data_cfg.test_split = split_list
+            log_message("CONFIG", f"Using test_split from command line: {split_list}", color="blue")
+            # If none of the splits contain "QA", set caption_only to true
+            if not any("QA" in split for split in split_list):
+                override_config(cfg.data_cfg, 'caption_only', True, 'caption_only')
+                log_message("CONFIG", f"No split contains 'QA', setting caption_only=True", color="blue")
+        else:
+            cfg.data_cfg.test_split = args.split
+            log_message("CONFIG", f"Using test_split from command line: {args.split}", color="blue")
+            # If split doesn't contain "QA", set caption_only to true
+            if "QA" not in args.split:
+                override_config(cfg.data_cfg, 'caption_only', True, 'caption_only')
+                log_message("CONFIG", f"Split '{args.split}' doesn't contain 'QA', setting caption_only=True", color="blue")
     if args.batch_size is not None:
         override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     override_config(cfg.data_cfg, 'use_random_question_for_caption', args.use_random_question_for_caption, 'use_random_question_for_caption')

@@ -110,26 +110,25 @@ class WaveCaptionDataset(Dataset):
             raise FileNotFoundError(f"Radar file not found: {radar_path}")
         return radar_path
     
-    def _load_data(self):
-        """Load and process dataset."""
-        if self.split == 'real':
-            data_path = 'dataset/REAL/all.json'
-        else:
-            # Load data from _split directory
-            data_path = osp.join(self.data_root, '_split', f'{self.split}.json')
-        
-        with open(data_path) as f:
-            data = json.load(f)
-        
+    def _process_json_data(self, data, split_identifier):
+        """Process a single JSON data object and return processed data items.
+
+        Args:
+            data: Dictionary containing the data to process
+            split_identifier: String identifier for determining split type logic
+
+        Returns:
+            List of processed data items
+        """
         processed_data = []
         for i in data:
             if 'captions' not in data[i]:
                 data[i]['captions'] = [data[i]['classname']]
-        
+
             question_qas = self._generate_question_qas(data[i])
             caption_qas = self._generate_caption_qas(data[i])
-            
-            if 'train' in self.split:
+
+            if 'train' in split_identifier:
                 # assign all caption QAs to data items (not random selection)
                 for qa in caption_qas:
                     data_items_caption = self._create_data_items(data[i], qa)
@@ -142,20 +141,52 @@ class WaveCaptionDataset(Dataset):
                         data_item['question'] = qa['question']
                         data_item['answer'] = qa['answer']
                     processed_data.extend(data_items)
-            elif 'test' in self.split:
+            elif 'test' in split_identifier:
                 if self.opt.get('caption_only'):
                     qa_caption = caption_qas[0] # all captions are combined with '#'
                     processed_data.extend(self._create_data_items(data[i], qa_caption))
-                else: 
+                else:
                     if question_qas:
                         for qa in question_qas:
                             data_items = self._create_data_items(data[i], qa)
                             processed_data.extend(data_items)
-                    else: 
+                    else:
                         raise ValueError(f"No question QAs available for {data[i]}")
-            else: 
-                raise ValueError(f"Invalid split: {self.split}")
-        
+            else:
+                raise ValueError(f"Invalid split: {split_identifier}")
+
+        return processed_data
+
+    def _load_data(self):
+        """Load and process dataset."""
+        processed_data = []
+
+        # Handle both single string and list of file paths
+        if isinstance(self.split, list):
+            # Multiple split files - process each file separately and accumulate results
+            for split_file in self.split:
+                if osp.exists(split_file):
+                    with open(split_file) as f:
+                        split_data = json.load(f)
+                    # Process this split file's data and accumulate results
+                    split_processed_data = self._process_json_data(split_data, split_file)
+                    processed_data.extend(split_processed_data)
+                    log_message("LOAD", f"Processed {len(split_processed_data)} items from {split_file}", color="green")
+                else:
+                    raise FileNotFoundError(f"Split file not found: {split_file}")
+        else:
+            # Single split file - must be a valid file path
+            if osp.exists(self.split):
+                # Direct file path provided
+                data_path = self.split
+                with open(data_path) as f:
+                    data = json.load(f)
+                # Process the data
+                processed_data = self._process_json_data(data, data_path)
+                log_message("LOAD", f"Processed {len(processed_data)} items from {data_path}", color="green")
+            else:
+                raise FileNotFoundError(f"Split file must be a valid file path: {self.split}")
+
         return processed_data
     
     def _generate_caption_qas(self, data_item):

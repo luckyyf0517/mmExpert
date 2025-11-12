@@ -89,8 +89,13 @@ def main():
 
     # Override training parameters if provided via command line
     if args.split is not None:
-        cfg.data_cfg.train_split = args.split
-        log_message("CONFIG", f"Using train_split from command line: {args.split}", color="blue")
+        # Parse comma-separated split files into list
+        if ',' in args.split:
+            cfg.data_cfg.train_split = args.split.split(',')
+            log_message("CONFIG", f"Using train_split from command line: {cfg.data_cfg.train_split}", color="blue")
+        else:
+            cfg.data_cfg.train_split = args.split
+            log_message("CONFIG", f"Using train_split from command line: {args.split}", color="blue")
     override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     override_config(cfg.data_cfg, 'num_workers', args.num_workers, 'num_workers')
     override_config(cfg.data_cfg, 'use_random_question_for_caption', args.use_random_question_for_caption, 'use_random_question_for_caption')
