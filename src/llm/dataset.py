@@ -111,12 +111,11 @@ class WaveCaptionDataset(Dataset):
             raise FileNotFoundError(f"Radar file not found: {radar_path}")
         return radar_path
     
-    def _process_json_data(self, data, split_identifier):
+    def _process_json_data(self, data):
         """Process a single JSON data object and return processed data items.
 
         Args:
             data: Dictionary containing the data to process
-            split_identifier: String identifier for determining split type logic
 
         Returns:
             List of processed data items
@@ -126,32 +125,30 @@ class WaveCaptionDataset(Dataset):
             if 'captions' not in data[i]:
                 data[i]['captions'] = [data[i]['classname']]
 
-            question_qas = self._generate_question_qas(data[i])
             caption_qas = self._generate_caption_qas(data[i])
+            question_qas = self._generate_question_qas(data[i])
 
             if self.stage == 'train' or self.stage == 'val':
-                # assign all caption QAs to data items (not random selection)
+                # assign all caption QAs to data items
                 for qa in caption_qas: 
-                    data_items_caption = self._create_data_items(data[i], qa)
-                    processed_data.extend(data_items_caption)
-                        
+                    data_item = self._create_data_item(data[i], qa)
+                    processed_data.append(data_item)
                 # assign question QA to each data item (only if question_qas is not empty)
                 if question_qas:
-                    data_items = self._create_data_items(data[i], {'question': None, 'answer': ''})
-                    for data_item in data_items:
-                        qa = random.choice(question_qas)
-                        data_item['question'] = qa['question']
-                        data_item['answer'] = qa['answer']
-                    processed_data.extend(data_items)
-                    
+                    data_item = self._create_data_item(data[i], {'question': None, 'answer': ''})
+                    qa = random.choice(question_qas)
+                    data_item['question'] = qa['question']
+                    data_item['answer'] = qa['answer']
+                    processed_data.append(data_item)
             elif self.stage == 'test':
                 if self.opt.get('caption_only'):
                     qa_caption = caption_qas[0] # all captions are combined with '#'
-                    processed_data.extend(self._create_data_items(data[i], qa_caption))
+                    data_item = self._create_data_item(data[i], qa_caption)
+                    processed_data.append(data_item)
                 elif question_qas:
-                    for qa in question_qas:
-                        data_items = self._create_data_items(data[i], qa)
-                        processed_data.extend(data_items)
+                    for qa in question_qas: # all question QAs are assigned to each data item
+                        data_item = self._create_data_item(data[i], qa)
+                        processed_data.append(data_item)
             
             else: 
                 raise ValueError(f"Invalid stage: {self.stage}")
@@ -170,7 +167,7 @@ class WaveCaptionDataset(Dataset):
                     with open(split_file) as f:
                         split_data = json.load(f)
                     # Process this split file's data and accumulate results
-                    split_processed_data = self._process_json_data(split_data, split_file)
+                    split_processed_data = self._process_json_data(split_data)
                     processed_data.extend(split_processed_data)
                     log_message("LOAD", f"Processed {len(split_processed_data)} items from {split_file}", color="green")
                 else:
@@ -183,8 +180,8 @@ class WaveCaptionDataset(Dataset):
                 with open(data_path) as f:
                     data = json.load(f)
                 # Process the data
-                processed_data = self._process_json_data(data, data_path)
-                log_message("LOAD", f"Processed {len(processed_data)} items from {data_path}", color="green")
+                processed_data = self._process_json_data(data)
+                log_message("LOAD", f"Processed {len(processed_data)} items from {data_path} at stage {self.stage}", color="green")
             else:
                 raise FileNotFoundError(f"Split file must be a valid file path: {self.split}")
 
@@ -192,36 +189,30 @@ class WaveCaptionDataset(Dataset):
     
     def _generate_caption_qas(self, data_item):
         """Generate caption-based QA pair."""
-        if 'train' in self.split:
+        if self.stage == 'train' or self.stage == 'val':
             qas = []
             for caption in data_item['captions']:
                 qas.append({'question': None, 'answer': caption})
             return qas
-        elif 'test' in self.split: 
+        elif self.stage == 'test': 
             return [{'question': None, 'answer': '#'.join(data_item['captions'])}]
-        else:
-            raise ValueError(f"Invalid split: {self.split}")
         
     def _generate_question_qas(self, data_item):
         """Generate question-based QA pairs."""
         questions = list(data_item['questions'].values()) if 'questions' in data_item else []
-        
-        if 'test' in self.split and questions:
-            return questions
+        return questions
     
-    def _create_data_items(self, data_item, qa):
+    def _create_data_item(self, data_item, qa):
         """Create data items using NPZ file format (new data organization)."""
         # New data format uses single NPZ file per sample (no rotation postfixes)
         radar_path = self._get_radar_path(data_item)
         
-        data_items = [{
+        return {
             'filename': radar_path,
             'question': qa.get('question') if qa else None,
             'answer': qa.get('answer') if qa else '',
             'caption': "\n".join(data_item['captions'])
-        }]
-        
-        return data_items
+        }
 
     def __len__(self):
         """Return number of utterances."""
