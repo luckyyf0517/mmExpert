@@ -27,7 +27,6 @@ from sentence_transformers import SentenceTransformer, util
 from transformers import AutoModel, AutoTokenizer
 from utils import (
     load_evaluation_data, 
-    extract_field_safely, 
     save_evaluation_results,
     clean_answer,
     special_token_filter,
@@ -72,7 +71,7 @@ class Evaluator():
 
         scorers = [
             (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
-            # (Meteor(),"METEOR"),  # Commented out - requires Java
+            (Meteor(), "METEOR"),
             (Rouge(), "ROUGE_L"),
             (Cider(), "CIDEr"),
             # (Spice(), "SPICE"),  # Commented out - requires Stanford CoreNLP
@@ -86,15 +85,22 @@ class Evaluator():
         for scorer, method in scorers:
             if verbose:
                 print('computing %s score...' % (scorer.method()))
-            if hasattr(scorer, 'method') and scorer.method() == "Bleu":
-                score, scores = scorer.compute_score(ref_coco, hypo_coco, verbose=0)
-            else:
-                score, scores = scorer.compute_score(ref_coco, hypo_coco)
-            if type(score) == list:
-                for m, s in zip(method, score):
-                    final_scores[m] = s
-            else:
-                final_scores[method] = score
+            try:
+                if hasattr(scorer, 'method') and scorer.method() == "Bleu":
+                    score, scores = scorer.compute_score(ref_coco, hypo_coco, verbose=0)
+                else:
+                    score, scores = scorer.compute_score(ref_coco, hypo_coco)
+                if type(score) == list:
+                    for m, s in zip(method, score):
+                        final_scores[m] = s
+                else:
+                    final_scores[method] = score
+            except Exception as e:
+                if verbose:
+                    print(f"Warning: Failed to compute {method} score: {e}")
+                    print("METEOR requires Java environment. Skipping METEOR metric.")
+                # Skip this metric if it fails (e.g., METEOR without Java)
+                continue
         return final_scores
 
     @staticmethod
@@ -156,6 +162,7 @@ class Evaluator():
         """
         scorers = [
             (Bleu(4), ["Bleu_1", "Bleu_2", "Bleu_3", "Bleu_4"]),
+            (Meteor(), "METEOR"),
             (Rouge(), "ROUGE_L"),
             (Cider(), "CIDEr"),
         ]
@@ -213,28 +220,34 @@ class Evaluator():
                 # Evaluate against each ground truth text
                 for gt_tokenized_text in gt_tokenized:
                     gt_coco = {sample_id: [gt_tokenized_text]}
-                    if hasattr(scorer, 'method') and scorer.method() == "Bleu":
-                        score, _ = scorer.compute_score(gt_coco, pred_coco, verbose=0)
-                    else:
-                        score, _ = scorer.compute_score(gt_coco, pred_coco)
-                    
-                    if isinstance(score, list):
-                        # For metrics like BLEU that return multiple scores
-                        for i, m in enumerate(method):
-                            if m not in sample_best_scores_list:
-                                sample_best_scores_list[m] = -1
-                            sample_best_scores_list[m] = max(sample_best_scores_list[m], score[i])
-                    else:
-                        # For single score metrics
-                        sample_best_score = max(sample_best_score, score)
+                    try:
+                        if hasattr(scorer, 'method') and scorer.method() == "Bleu":
+                            score, _ = scorer.compute_score(gt_coco, pred_coco, verbose=0)
+                        else:
+                            score, _ = scorer.compute_score(gt_coco, pred_coco)
+                        
+                        if isinstance(score, list):
+                            # For metrics like BLEU that return multiple scores
+                            for i, m in enumerate(method):
+                                if m not in sample_best_scores_list:
+                                    sample_best_scores_list[m] = -1
+                                sample_best_scores_list[m] = max(sample_best_scores_list[m], score[i])
+                        else:
+                            # For single score metrics
+                            sample_best_score = max(sample_best_score, score)
+                    except Exception as e:
+                        # Skip this GT text if scorer fails (e.g., METEOR without Java)
+                        if verbose and sample_id == list(ground_truths.keys())[0]:
+                            print(f"Warning: Failed to compute {method} for sample {sample_id}: {e}")
+                        continue
                 
                 # Store the best scores
-                if isinstance(score, list):
+                if sample_best_scores_list:
                     # Multi-score metric
                     for metric, score in sample_best_scores_list.items():
                         best_scores[metric] = score
-                else:
-                    # Single-score metric
+                elif sample_best_score >= 0:
+                    # Single-score metric (only if we got a valid score)
                     best_scores[method] = sample_best_score
             
             # Add best scores to accumulators
@@ -249,7 +262,7 @@ class Evaluator():
         return final_scores
 
 
-    def load_data_and_eval(self, max_length=1024, num_workers=1, use_exist=False):
+    def load_data_and_eval(self, max_length=1024, use_exist=False):
         all_pred = {}
         lan_gt = {}
         lan_pred = {}
@@ -260,73 +273,37 @@ class Evaluator():
         # Load evaluation data using the unified function
         all_pred = load_evaluation_data(self.directory_path, merged_filename="results.json", use_exist=use_exist)
 
-        if num_workers == 1:
-            # Single-threaded evaluation (original approach)
-            bar = tqdm(all_pred)
-            batch_lan_pred = []
-            batch_lan_gt = []
-            count_gt = []
+        # Single-threaded evaluation
+        bar = tqdm(all_pred)
+        batch_lan_pred = []
+        batch_lan_gt = []
+        count_gt = []
 
-            for idx, key in enumerate(bar):
-                pred_text = all_pred[key]["prediction"]
-                answer_text = all_pred[key]["answer"]
-                # Answer should already be a list (preprocessed in utils.py)
-                gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
+        for idx, key in enumerate(bar):
+            pred_text = all_pred[key]["prediction"]
+            answer_text = all_pred[key]["answer"]
+            # Answer should already be a list (preprocessed in utils.py)
+            gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
 
-                pred = special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
-                lan_pred[key] = [pred]
-                lan_gt[key] = [special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
-                batch_lan_pred += lan_pred[key]
-                batch_lan_gt += lan_gt[key]
-                count_gt += [len(lan_gt[key])]
-                if idx % self.eval_bs == 0:
-                    score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
-                    all_simcse_similarity += score[1]
-                    all_sbert_similarity += score[0]
-
-                    batch_lan_pred = []
-                    batch_lan_gt = []
-                    count_gt = []
-
-            if len(batch_lan_pred):
+            pred = special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
+            lan_pred[key] = [pred]
+            lan_gt[key] = [special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
+            batch_lan_pred += lan_pred[key]
+            batch_lan_gt += lan_gt[key]
+            count_gt += [len(lan_gt[key])]
+            if idx % self.eval_bs == 0:
                 score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
                 all_simcse_similarity += score[1]
                 all_sbert_similarity += score[0]
-        else:
-            # Note: num_workers parameter is ignored for language evaluation
-            print("Note: num_workers parameter is ignored for language evaluation. Using single-threaded evaluation.")
-            print("Running single-threaded evaluation...")
 
-            bar = tqdm(all_pred)
-            batch_lan_pred = []
-            batch_lan_gt = []
-            count_gt = []
+                batch_lan_pred = []
+                batch_lan_gt = []
+                count_gt = []
 
-            for idx, key in enumerate(bar):
-                pred_text = all_pred[key]["prediction"]
-                answer_text = all_pred[key]["answer"]
-                # Answer should already be a list (preprocessed in utils.py)
-                gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
-
-                pred = special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
-                lan_pred[key] = [pred]
-                lan_gt[key] = [special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
-                batch_lan_pred += lan_pred[key]
-                batch_lan_gt += lan_gt[key]
-                count_gt += [len(lan_gt[key])]
-                if idx % self.eval_bs == 0:
-                    score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
-                    all_simcse_similarity += score[1]
-                    all_sbert_similarity += score[0]
-
-                    batch_lan_pred = []
-                    batch_lan_gt = []
-                    count_gt = []
-
-            if len(batch_lan_pred):
-                score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
-                all_simcse_similarity += score[1]
-                all_sbert_similarity += score[0]
+        if len(batch_lan_pred):
+            score = self.batch_eval(batch_lan_pred, batch_lan_gt, count_gt)
+            all_simcse_similarity += score[1]
+            all_sbert_similarity += score[0]
 
         assert len(all_simcse_similarity) == len(all_pred)
         
@@ -362,28 +339,30 @@ class Evaluator():
         
         # Print final results (without "(best)" summary_language
         print("=== Best GT Scores (Average across all samples) ===")
-        print("Bleu_1:      ", final_scores['Bleu_1'])
-        print("Bleu_2:      ", final_scores['Bleu_2'])
-        print("Bleu_3:      ", final_scores['Bleu_3'])
-        print("Bleu_4:      ", final_scores['Bleu_4'])
-        print("ROUGE_L:      ", final_scores['ROUGE_L'])
-        print("CIDEr:      ", final_scores['CIDEr'])
+        print("Bleu_1:      ", final_scores.get('Bleu_1', 0.0))
+        print("Bleu_2:      ", final_scores.get('Bleu_2', 0.0))
+        print("Bleu_3:      ", final_scores.get('Bleu_3', 0.0))
+        print("Bleu_4:      ", final_scores.get('Bleu_4', 0.0))
+        if 'METEOR' in final_scores:
+            print("METEOR:     ", final_scores['METEOR'])
+        print("ROUGE_L:      ", final_scores.get('ROUGE_L', 0.0))
+        print("CIDEr:      ", final_scores.get('CIDEr', 0.0))
         print("EM:         ", sum(EM_best)/len(EM_best))
         print("refined EM: ", sum(EM_refine_best)/len(EM_refine_best))
         print("simcse:     ", sum(all_simcse_similarity)/len(all_simcse_similarity))
         print("sbert:      ", sum(all_sbert_similarity)/len(all_sbert_similarity))
 
         # Return evaluation results for saving
-        return {
+        result = {
             'total_samples': len(EM_best),
             'bleu_scores': {
-                'bleu_1': final_scores['Bleu_1'],
-                'bleu_2': final_scores['Bleu_2'],
-                'bleu_3': final_scores['Bleu_3'],
-                'bleu_4': final_scores['Bleu_4']
+                'bleu_1': final_scores.get('Bleu_1', 0.0),
+                'bleu_2': final_scores.get('Bleu_2', 0.0),
+                'bleu_3': final_scores.get('Bleu_3', 0.0),
+                'bleu_4': final_scores.get('Bleu_4', 0.0)
             },
-            'rouge_score': final_scores['ROUGE_L'],
-            'cider_score': final_scores['CIDEr'],
+            'rouge_score': final_scores.get('ROUGE_L', 0.0),
+            'cider_score': final_scores.get('CIDEr', 0.0),
             'exact_match': {
                 'em': sum(EM_best)/len(EM_best),
                 'em_refined': sum(EM_refine_best)/len(EM_refine_best)
@@ -393,6 +372,12 @@ class Evaluator():
                 'sbert': sum(all_sbert_similarity)/len(all_sbert_similarity)
             }
         }
+        
+        # Add METEOR score if available
+        if 'METEOR' in final_scores:
+            result['meteor_score'] = final_scores['METEOR']
+        
+        return result
     
 
 if __name__ == "__main__":
@@ -404,7 +389,6 @@ if __name__ == "__main__":
     parser.add_argument('--directory_path', type=str,
                        help='Path to directory or single JSON file (deprecated, use --evaluation_dir)')
     parser.add_argument('--eval_bs', type=int, default=100, help='evaluation batch size')
-    parser.add_argument('--num_workers', type=int, default=1, help='Number of parallel workers for evaluation')
     parser.add_argument('--use_exist', action='store_true',
                        help='Use existing merged results.json file if it exists')
 
@@ -419,12 +403,13 @@ if __name__ == "__main__":
         parser.error("Either --evaluation_dir or --directory_path must be provided")
 
     print(f"Running language evaluation for {input_path} ...")
+    print("Using optimized text cleaning strategy for BLEU scores")
 
     eval = Evaluator(
         directory_path=input_path,
         eval_bs=args.eval_bs
     )
-    results = eval.load_data_and_eval(max_length=1024, num_workers=args.num_workers, use_exist=args.use_exist)
+    results = eval.load_data_and_eval(max_length=1024, use_exist=args.use_exist)
 
     # Save evaluation results
     if os.path.isdir(input_path):

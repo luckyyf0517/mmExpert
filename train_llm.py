@@ -139,7 +139,7 @@ def main():
                 return
 
             # Create epoch-specific directory
-            epoch_dir = os.path.join(self.save_dir, "epochs", f"epoch_{trainer.current_epoch:02d}", "output")
+            epoch_dir = os.path.join(self.save_dir, "epochs", f"epoch_{trainer.current_epoch:02d}")
             os.makedirs(epoch_dir, exist_ok=True)
 
             # Save training artifacts for this epoch (without logging)
