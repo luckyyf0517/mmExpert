@@ -9,10 +9,8 @@ import os.path as osp
 
 from tqdm import tqdm
 
-from copy import deepcopy
 from collections import OrderedDict
 
-import re
 from pycocoevalcap.tokenizer.ptbtokenizer import PTBTokenizer
 from pycocoevalcap.bleu.bleu import Bleu
 from pycocoevalcap.meteor.meteor import Meteor
@@ -27,7 +25,14 @@ import copy
 
 from sentence_transformers import SentenceTransformer, util
 from transformers import AutoModel, AutoTokenizer
-from utils import load_evaluation_data, extract_field_safely, save_evaluation_results
+from utils import (
+    load_evaluation_data, 
+    extract_field_safely, 
+    save_evaluation_results,
+    clean_answer,
+    special_token_filter,
+    refined_EM
+)
 
 
 
@@ -91,133 +96,6 @@ class Evaluator():
             else:
                 final_scores[method] = score
         return final_scores
-
-    @staticmethod
-    def clean_answer(data):
-        """
-        LEO clean strategy
-        """
-        data = data.lower()
-        data = re.sub('[ ]+$' ,'', data)
-        data = re.sub('^[ ]+' ,'', data)
-        data = re.sub(' {2,}', ' ', data)
-
-        data = re.sub(r'\.[ ]{2,}', '. ', data)
-        data = re.sub(r'[^a-zA-Z0-9,\'\s\-:]+', '', data)
-        data = re.sub('ç' ,'c', data)
-        data = re.sub('’' ,'\'', data)
-        data = re.sub(r'\bletf\b' ,'left', data)
-        data = re.sub(r'\blet\b' ,'left', data)
-        data = re.sub(r'\btehre\b' ,'there', data)
-        data = re.sub(r'\brigth\b' ,'right', data)
-        data = re.sub(r'\brght\b' ,'right', data)
-        data = re.sub(r'\bbehine\b', 'behind', data)
-        data = re.sub(r'\btv\b' ,'TV', data)
-        data = re.sub(r'\bchai\b' ,'chair', data)
-        data = re.sub(r'\bwasing\b' ,'washing', data)
-        data = re.sub(r'\bwaslked\b' ,'walked', data)
-        data = re.sub(r'\boclock\b' ,'o\'clock', data)
-        data = re.sub(r'\bo\'[ ]+clock\b' ,'o\'clock', data)
-
-        # digit to word, only for answer
-        data = re.sub(r'\b0\b', 'zero', data)
-        data = re.sub(r'\bnone\b', 'zero', data)
-        data = re.sub(r'\b1\b', 'one', data)
-        data = re.sub(r'\b2\b', 'two', data)
-        data = re.sub(r'\b3\b', 'three', data)
-        data = re.sub(r'\b4\b', 'four', data)
-        data = re.sub(r'\b5\b', 'five', data)
-        data = re.sub(r'\b6\b', 'six', data)
-        data = re.sub(r'\b7\b', 'seven', data)
-        data = re.sub(r'\b8\b', 'eight', data)
-        data = re.sub(r'\b9\b', 'nine', data)
-        data = re.sub(r'\b10\b', 'ten', data)
-        data = re.sub(r'\b11\b', 'eleven', data)
-        data = re.sub(r'\b12\b', 'twelve', data)
-        data = re.sub(r'\b13\b', 'thirteen', data)
-        data = re.sub(r'\b14\b', 'fourteen', data)
-        data = re.sub(r'\b15\b', 'fifteen', data)
-        data = re.sub(r'\b16\b', 'sixteen', data)
-        data = re.sub(r'\b17\b', 'seventeen', data)
-        data = re.sub(r'\b18\b', 'eighteen', data)
-        data = re.sub(r'\b19\b', 'nineteen', data)
-        data = re.sub(r'\b20\b', 'twenty', data)
-        data = re.sub(r'\b23\b', 'twenty-three', data)
-
-        # misc
-        # no1, mat2, etc
-        data = re.sub(r'\b([a-zA-Z]+)([0-9])\b' ,r'\g<1>', data)
-        data = re.sub(r'\ba\b ([a-zA-Z]+)' ,r'\g<1>', data)
-        data = re.sub(r'\ban\b ([a-zA-Z]+)' ,r'\g<1>', data)
-        data = re.sub(r'\bthe\b ([a-zA-Z]+)' ,r'\g<1>', data)
-
-        data = re.sub(r'\bbackwards\b', 'backward', data)
-
-        return data
-    
-    def special_token_filter(self,lan,clean = True,truncation = True,max_length = 256):
-        """
-        Usage:
-            clean the language, remove stop words and special tokens
-        Args:
-            lan: List[str], language to be cleaned
-            clean: bool, if apply LEO clean strategy
-            truncation: to avoid crash pycocoevalcap the input sentence will be truncated to max_length
-            max_length: You may set this to the max length of possible gt answer
-        """
-        replacements = {
-        "ASSISTANT:": "",
-        "ASSISTANT: ": "",
-        "\n": "",
-        "<s>": "",
-        "</s>": "",
-        "<unk>": "",
-        "<p>": "",
-        "</p>": "",
-        "<ref>": "",
-        "<|endoftext|>": ""  # for GPT2
-        }
-        for old, new in replacements.items():
-            lan = lan.replace(old, new)
-        lan = lan.strip()
-        lan = re.sub(r'\s{2,}', ' ', lan)
-        if truncation:
-            if len(lan)>max_length:
-                lan = lan[:max_length]
-        if clean:
-            lan = self.clean_answer(lan)
-        return lan
-
-    @staticmethod
-    def refined_EM(data,gt,set_zero_as_error=True,not_refine=False):
-        EM = []
-        _data = copy.deepcopy(data)
-        if not_refine:
-            for ins in _data:
-                    pred  = _data[ins][0]
-                    if pred in gt[ins]:
-                        EM.append(1)
-                    else:
-                        EM.append(0)
-        else:
-            for ins in _data:
-                to_append = 0
-                pred  = _data[ins][0]
-                if set_zero_as_error:
-                    if pred in [" ",""]:
-                        pred = "@@@@@@@@-= Empty Answer =-@@@@@@@@@"
-                for _gt in gt[ins]:
-                    if pred == _gt:
-                        to_append = 1
-                        continue
-                    elif "".join(pred.split()) in "".join(_gt.split()):
-                        to_append = 1
-                        continue
-                    elif "".join(_gt.split()) in "".join(pred.split()):
-                        to_append = 1
-                        continue
-                EM.append(to_append)
-        return EM
 
     @staticmethod
     def print_formated_dict(lan):
@@ -371,7 +249,7 @@ class Evaluator():
         return final_scores
 
 
-    def load_data_and_eval(self, max_length=1024, num_workers=1):
+    def load_data_and_eval(self, max_length=1024, num_workers=1, use_exist=False):
         all_pred = {}
         lan_gt = {}
         lan_pred = {}
@@ -380,7 +258,7 @@ class Evaluator():
         all_sbert_similarity = []
 
         # Load evaluation data using the unified function
-        all_pred = load_evaluation_data(self.directory_path, merged_filename="results.json")
+        all_pred = load_evaluation_data(self.directory_path, merged_filename="results.json", use_exist=use_exist)
 
         if num_workers == 1:
             # Single-threaded evaluation (original approach)
@@ -395,9 +273,9 @@ class Evaluator():
                 # Answer should already be a list (preprocessed in utils.py)
                 gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
 
-                pred = self.special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
+                pred = special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
                 lan_pred[key] = [pred]
-                lan_gt[key] = [self.special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
+                lan_gt[key] = [special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
                 batch_lan_pred += lan_pred[key]
                 batch_lan_gt += lan_gt[key]
                 count_gt += [len(lan_gt[key])]
@@ -430,9 +308,9 @@ class Evaluator():
                 # Answer should already be a list (preprocessed in utils.py)
                 gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
 
-                pred = self.special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
+                pred = special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
                 lan_pred[key] = [pred]
-                lan_gt[key] = [self.special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
+                lan_gt[key] = [special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
                 batch_lan_pred += lan_pred[key]
                 batch_lan_gt += lan_gt[key]
                 count_gt += [len(lan_gt[key])]
@@ -473,8 +351,8 @@ class Evaluator():
                 temp_pred = {key: [pred]}
                 temp_gt = {key: [gt_text]}
                 
-                EM_result = self.refined_EM(temp_pred, temp_gt, not_refine=True)
-                EM_refine_result = self.refined_EM(temp_pred, temp_gt, not_refine=False)
+                EM_result = refined_EM(temp_pred, temp_gt, not_refine=True)
+                EM_refine_result = refined_EM(temp_pred, temp_gt, not_refine=False)
                 
                 best_EM = max(best_EM, EM_result[0])
                 best_EM_refine = max(best_EM_refine, EM_refine_result[0])
@@ -527,6 +405,8 @@ if __name__ == "__main__":
                        help='Path to directory or single JSON file (deprecated, use --evaluation_dir)')
     parser.add_argument('--eval_bs', type=int, default=100, help='evaluation batch size')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of parallel workers for evaluation')
+    parser.add_argument('--use_exist', action='store_true',
+                       help='Use existing merged results.json file if it exists')
 
     args = parser.parse_args()
 
@@ -544,7 +424,7 @@ if __name__ == "__main__":
         directory_path=input_path,
         eval_bs=args.eval_bs
     )
-    results = eval.load_data_and_eval(max_length=1024, num_workers=args.num_workers)
+    results = eval.load_data_and_eval(max_length=1024, num_workers=args.num_workers, use_exist=args.use_exist)
 
     # Save evaluation results
     if os.path.isdir(input_path):
