@@ -163,7 +163,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
         # Inference mode flag
         self.is_inference = cfg.get('is_inference', False)
 
-    def setup(self, stage=None):
+    def setup(self, stage='fit'):
         """Setup datasets"""
         # Initialize tokenizer with conversation template
         self.tokenizer = self._load_tokenizer()
@@ -173,12 +173,12 @@ class WaveLLMDataModule(pl.LightningDataModule):
         conversation_lib.default_conversation = conversation_lib.conv_templates[self.conversation_template].copy()
 
         # Load datasets
-        if stage == 'fit' or stage is None:
-            self.train_dataset = self._load_dataset(self.train_split)
-            self.eval_dataset = self._load_dataset(self.test_split) if stage == 'fit' else None
+        if stage == 'fit':
+            self.train_dataset = self._load_dataset(self.train_split, stage='train')
+            self.eval_dataset = self._load_dataset(self.test_split, stage='val')
 
         if stage == 'test':
-            self.test_dataset = self._load_dataset(self.test_split)
+            self.test_dataset = self._load_dataset(self.test_split, stage='test')
 
     def _load_tokenizer(self):
         """Load tokenizer from model path"""
@@ -237,7 +237,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
 
         return conversation
 
-    def _load_dataset(self, split):
+    def _load_dataset(self, split, stage='train'):
         """Load dataset using existing wavellm_dataset logic but with new conversation handling
         
         Returns a wrapper dataset that processes items on-the-fly to avoid loading all data into memory.
@@ -250,6 +250,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
         original_dataset = WaveCaptionDataset(
             data_root=self.data_root,
             split=split,
+            stage=stage,
             tokenizer=self.tokenizer,
             caption_only=self.cfg.get('caption_only', None),
             use_random_question_for_caption=self.cfg.get('use_random_question_for_caption', True)

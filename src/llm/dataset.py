@@ -53,10 +53,11 @@ DEFAULT_QUESTION_PROMPTS = [
 class WaveCaptionDataset(Dataset):
     """Dataset for wave caption tasks with multimodal support."""
     
-    def __init__(self, data_root=None, split="train", tokenizer=None, caption_only=None, use_random_question_for_caption=True) -> None:
+    def __init__(self, data_root=None, split="train", stage='train', tokenizer=None, caption_only=None, use_random_question_for_caption=True) -> None:
         super(WaveCaptionDataset, self).__init__()
         self.data_root = data_root
         self.split = split
+        self.stage = stage
         self.tokenizer = tokenizer
         self.use_random_question_for_caption = use_random_question_for_caption
         self.opt = self._load_config(data_root, split)
@@ -128,11 +129,12 @@ class WaveCaptionDataset(Dataset):
             question_qas = self._generate_question_qas(data[i])
             caption_qas = self._generate_caption_qas(data[i])
 
-            if 'train' in split_identifier:
+            if self.stage == 'train' or self.stage == 'val':
                 # assign all caption QAs to data items (not random selection)
-                for qa in caption_qas:
+                for qa in caption_qas: 
                     data_items_caption = self._create_data_items(data[i], qa)
                     processed_data.extend(data_items_caption)
+                        
                 # assign question QA to each data item (only if question_qas is not empty)
                 if question_qas:
                     data_items = self._create_data_items(data[i], {'question': None, 'answer': ''})
@@ -141,19 +143,18 @@ class WaveCaptionDataset(Dataset):
                         data_item['question'] = qa['question']
                         data_item['answer'] = qa['answer']
                     processed_data.extend(data_items)
-            elif 'test' in split_identifier:
+                    
+            elif self.stage == 'test':
                 if self.opt.get('caption_only'):
                     qa_caption = caption_qas[0] # all captions are combined with '#'
                     processed_data.extend(self._create_data_items(data[i], qa_caption))
-                else:
-                    if question_qas:
-                        for qa in question_qas:
-                            data_items = self._create_data_items(data[i], qa)
-                            processed_data.extend(data_items)
-                    else:
-                        raise ValueError(f"No question QAs available for {data[i]}")
-            else:
-                raise ValueError(f"Invalid split: {split_identifier}")
+                elif question_qas:
+                    for qa in question_qas:
+                        data_items = self._create_data_items(data[i], qa)
+                        processed_data.extend(data_items)
+            
+            else: 
+                raise ValueError(f"Invalid stage: {self.stage}")
 
         return processed_data
 
