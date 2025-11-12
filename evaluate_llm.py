@@ -41,8 +41,8 @@ def main():
                         help="Path to data directory (overrides config file)")
 
     # Optional arguments
-    parser.add_argument("--split", type=str, default=None,
-                        help="Dataset split to evaluate (overrides config file)")
+    parser.add_argument("--test_split", type=str, default=None,
+                        help="Dataset test split to evaluate (overrides config file)")
     parser.add_argument("--batch_size", type=int, default=None,
                         help="Batch size for evaluation (overrides config file)")
     parser.add_argument("--use_random_question_for_caption", type=lambda x: x.lower() == 'true', default=None,
@@ -104,10 +104,10 @@ def main():
     model, cfg = load_model_from_checkpoint(checkpoint_path, args.config, args.data_root)
 
     # Override config with command line arguments
-    if args.split is not None:
+    if args.test_split is not None:
         # Parse comma-separated split files into list
-        if ',' in args.split:
-            split_list = args.split.split(',')
+        if ',' in args.test_split:
+            split_list = args.test_split.split(',')
             cfg.data_cfg.test_split = split_list
             log_message("CONFIG", f"Using test_split from command line: {split_list}", color="blue")
             # If none of the splits contain "QA", set caption_only to true
@@ -115,12 +115,12 @@ def main():
                 override_config(cfg.data_cfg, 'caption_only', True, 'caption_only')
                 log_message("CONFIG", f"No split contains 'QA', setting caption_only=True", color="blue")
         else:
-            cfg.data_cfg.test_split = args.split
-            log_message("CONFIG", f"Using test_split from command line: {args.split}", color="blue")
+            cfg.data_cfg.test_split = args.test_split
+            log_message("CONFIG", f"Using test_split from command line: {args.test_split}", color="blue")
             # If split doesn't contain "QA", set caption_only to true
-            if "QA" not in args.split:
+            if "QA" not in args.test_split:
                 override_config(cfg.data_cfg, 'caption_only', True, 'caption_only')
-                log_message("CONFIG", f"Split '{args.split}' doesn't contain 'QA', setting caption_only=True", color="blue")
+                log_message("CONFIG", f"Split '{args.test_split}' doesn't contain 'QA', setting caption_only=True", color="blue")
     if args.batch_size is not None:
         override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     override_config(cfg.data_cfg, 'use_random_question_for_caption', args.use_random_question_for_caption, 'use_random_question_for_caption')

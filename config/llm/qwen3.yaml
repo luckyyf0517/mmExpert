@@ -27,8 +27,8 @@ data_cfg:
   model_path: "Qwen/Qwen3-4B-Instruct-2507"
   model_max_length: 2048
   batch_size: 6
-  train_split: "train_QAs"
-  test_split: "test_QAs"
+  train_split: "dataset/HumanML3D/_split/train.json"
+  test_split: "dataset/HumanML3D/_split/test.json"
 
   # Must match model_cfg
   conversation_template: "qwen"
