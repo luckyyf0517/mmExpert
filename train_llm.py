@@ -37,8 +37,10 @@ def parse_args():
     # Data root path (overrides config file)
     parser.add_argument('--data_root', type=str, default=None,
                         help='Path to feature directory (overrides config file)')
-    parser.add_argument('--split', type=str, default=None,
-                        help='Dataset split to use for training (overrides config file)')
+    parser.add_argument('--train_split', type=str, default=None,
+                        help='Dataset train split to use for training (overrides config file)')
+    parser.add_argument('--test_split', type=str, default=None,
+                        help='Dataset test split to use for evaluation (overrides config file)')
 
     # Training parameters (override config file)
     parser.add_argument('--batch_size', type=int, default=None,
@@ -88,14 +90,23 @@ def main():
             cfg.model_cfg.encoder_path = cfg.data_cfg.data_root
 
     # Override training parameters if provided via command line
-    if args.split is not None:
+    if args.train_split is not None:
         # Parse comma-separated split files into list
-        if ',' in args.split:
-            cfg.data_cfg.train_split = args.split.split(',')
+        if ',' in args.train_split:
+            cfg.data_cfg.train_split = args.train_split.split(',')
             log_message("CONFIG", f"Using train_split from command line: {cfg.data_cfg.train_split}", color="blue")
         else:
-            cfg.data_cfg.train_split = args.split
-            log_message("CONFIG", f"Using train_split from command line: {args.split}", color="blue")
+            cfg.data_cfg.train_split = args.train_split
+            log_message("CONFIG", f"Using train_split from command line: {args.train_split}", color="blue")
+
+    if args.test_split is not None:
+        # Parse comma-separated split files into list
+        if ',' in args.test_split:
+            cfg.data_cfg.test_split = args.test_split.split(',')
+            log_message("CONFIG", f"Using test_split from command line: {cfg.data_cfg.test_split}", color="blue")
+        else:
+            cfg.data_cfg.test_split = args.test_split
+            log_message("CONFIG", f"Using test_split from command line: {args.test_split}", color="blue")
     override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     override_config(cfg.data_cfg, 'num_workers', args.num_workers, 'num_workers')
     override_config(cfg.data_cfg, 'use_random_question_for_caption', args.use_random_question_for_caption, 'use_random_question_for_caption')
