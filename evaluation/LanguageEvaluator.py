@@ -32,7 +32,7 @@ from utils import (
     special_token_filter,
     refined_EM
 )
-
+CLEAN_TEXT = True
 
 
 class Evaluator():
@@ -285,9 +285,9 @@ class Evaluator():
             # Answer should already be a list (preprocessed in utils.py)
             gt_list = answer_text if isinstance(answer_text, list) else [answer_text]
 
-            pred = special_token_filter(pred_text, clean=True, truncation=True, max_length=max_length)
+            pred = special_token_filter(pred_text, clean=CLEAN_TEXT, truncation=True, max_length=max_length)
             lan_pred[key] = [pred]
-            lan_gt[key] = [special_token_filter(i, clean=True, truncation=True, max_length=max_length) for i in gt_list]
+            lan_gt[key] = [special_token_filter(i, clean=CLEAN_TEXT, truncation=True, max_length=max_length) for i in gt_list]
             batch_lan_pred += lan_pred[key]
             batch_lan_gt += lan_gt[key]
             count_gt += [len(lan_gt[key])]

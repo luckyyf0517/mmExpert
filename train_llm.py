@@ -49,6 +49,12 @@ def parse_args():
                         help='Number of data loading workers (overrides config file)')
     parser.add_argument('--use_random_question_for_caption', type=lambda x: x.lower() == 'true', default=None,
                         help='Whether to use random question selection (true/false, overrides config file)')
+    parser.add_argument('--learning_rate', type=float, default=None,
+                        help='Learning rate for training (overrides config file)')
+    parser.add_argument('--weight_decay', type=float, default=None,
+                        help='Weight decay for training (overrides config file)')
+    parser.add_argument('--warmup_steps', type=int, default=None,
+                        help='Warmup steps for training (overrides config file)')
     parser.add_argument('--max_epochs', type=int, default=None,
                         help='Maximum number of training epochs (overrides config file)')
     parser.add_argument('--max_steps', type=int, default=None,
@@ -112,6 +118,9 @@ def main():
     override_config(cfg.data_cfg, 'use_random_question_for_caption', args.use_random_question_for_caption, 'use_random_question_for_caption')
     override_config(cfg.training, 'max_epochs', args.max_epochs, 'max_epochs')
     override_config(cfg.training, 'gradient_accumulation_steps', args.gradient_accumulation_steps, 'gradient_accumulation_steps')
+    override_config(cfg.training, 'learning_rate', args.learning_rate, 'learning_rate')
+    override_config(cfg.training, 'weight_decay', args.weight_decay, 'weight_decay')
+    override_config(cfg.training, 'warmup_steps', args.warmup_steps, 'warmup_steps')
 
     # Set seeds
     pl.seed_everything(args.seed)

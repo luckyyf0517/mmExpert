@@ -135,10 +135,8 @@ class WaveCaptionDataset(Dataset):
                     processed_data.append(data_item)
                 # assign question QA to each data item (only if question_qas is not empty)
                 if question_qas:
-                    data_item = self._create_data_item(data[i], {'question': None, 'answer': ''})
                     qa = random.choice(question_qas)
-                    data_item['question'] = qa['question']
-                    data_item['answer'] = qa['answer']
+                    data_item = self._create_data_item(data[i], qa)
                     processed_data.append(data_item)
             elif self.stage == 'test':
                 if self.opt.get('caption_only'):

@@ -6,25 +6,24 @@ import codecs as cs
 from tqdm import tqdm
 
 # Constants
-DATASETS = ['HumanML3D']
-SAVE_DIR = 'dataset/HumanML3D/_split'
+DATASETS = ['HumanML3DExt']
+SAVE_DIR = 'dataset/HumanML3DExt/_split'
 MIN_MOTION_LEN = 100  # From DEFAULT_RADAR_OPT
 MAX_MOTION_LEN = 500  # From DEFAULT_RADAR_OPT
-TRAIN_VAL_SPLIT_RATIO = 10  # Every 10th file goes to validation
 
 def collect_file_paths(datasets):
     """Collect all NPZ file paths from specified datasets."""
     all_filelist = []
     for dataset_name in datasets:
-        # Look for NPZ files (radar format from DATA_FORMAT.md)
-        filelist = sorted(glob.glob(f'dataset/{dataset_name}/udoppler/*.npz'))
+        # Look for NPZ files (mmwave format for HumanML3DExt)
+        filelist = sorted(glob.glob(f'dataset/{dataset_name}/mmwave/*.npz'))
         print(f'Found {len(filelist)} NPZ files in {dataset_name}')
         all_filelist += filelist
     return all_filelist
 
 def get_text_filename(motion_filename):
     """Convert radar filename to corresponding text filename."""
-    textname = motion_filename.replace('udoppler', 'texts').replace('.npz', '.txt')
+    textname = motion_filename.replace('mmwave', 'texts').replace('.npz', '.txt')
     return textname
 
 def validate_radar_data(radar_data):
@@ -66,7 +65,7 @@ def process_text_file(text_filename):
     except Exception as e:
         print(f"Warning: Could not read text file {text_filename}: {e}")
         return []
-    
+
     return captions
 
 def process_radar_file(filename):
@@ -99,20 +98,6 @@ def process_radar_file(filename):
         'captions': captions
     }
 
-def split_data(data_dict):
-    """Split data into train and validation sets."""
-    train_dict = {}
-    val_dict = {}
-    
-    for key, value in data_dict.items():
-        file_index = int(value['fileindex'])
-        if file_index % TRAIN_VAL_SPLIT_RATIO == 0:
-            val_dict[key] = value
-        else:
-            train_dict[key] = value
-    
-    return train_dict, val_dict
-
 def save_json_formatted(data, filepath):
     """Save data to JSON file with proper formatting."""
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -120,8 +105,8 @@ def save_json_formatted(data, filepath):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 def main():
-    """Main function to process radar datasets and create splits."""
-    print("Starting radar dataset processing...")
+    """Main function to process radar datasets and create all.json."""
+    print("Starting HumanML3DExt radar dataset processing...")
 
     # Collect all NPZ file paths
     all_filelist = collect_file_paths(DATASETS)
@@ -139,19 +124,11 @@ def main():
 
     print(f'Successfully processed {len(data_dict)} radar files')
 
-    # Split data
-    train_dict, val_dict = split_data(data_dict)
-    print(f'Train set: {len(train_dict)} files')
-    print(f'Validation set: {len(val_dict)} files')
-
-    # Save formatted JSON files
-    print(f'Saving files to {SAVE_DIR}...')
-    save_json_formatted(train_dict, f'{SAVE_DIR}/train.json')
-    save_json_formatted(val_dict, f'{SAVE_DIR}/val.json')
-    save_json_formatted(val_dict, f'{SAVE_DIR}/test.json')
+    # Save formatted JSON file
+    print(f'Saving all.json to {SAVE_DIR}...')
     save_json_formatted(data_dict, f'{SAVE_DIR}/all.json')
 
-    print('Radar dataset processing completed successfully!')
+    print('HumanML3DExt radar dataset processing completed successfully!')
 
 if __name__ == "__main__":
     main()
