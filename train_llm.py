@@ -119,9 +119,33 @@ def main():
     model_cfg_with_training.debug = args.debug
     model = WaveLLMTrainer(model_cfg_with_training)
 
+    class EpochCheckpointCallback(pl.Callback):
+        """Save adapter and non-LoRA weights after each epoch"""
+
+        def __init__(self, save_dir):
+            super().__init__()
+            self.save_dir = save_dir
+
+        def on_train_epoch_end(self, trainer, pl_module):
+            """Save model artifacts at the end of each training epoch"""
+            import os
+            from src.llm.utils.common_utils import save_training_artifacts
+            from src.llm.trainer import _is_rank_0
+
+            if not _is_rank_0():
+                return
+
+            # Create epoch-specific directory
+            epoch_dir = os.path.join(self.save_dir, "epochs", f"epoch_{trainer.current_epoch:02d}", "output")
+            os.makedirs(epoch_dir, exist_ok=True)
+
+            # Save training artifacts for this epoch (without logging)
+            save_training_artifacts(pl_module, epoch_dir, cfg, verbose=False)
+
     # Setup callbacks - no checkpoint saving (we'll save LoRA adapter manually)
     callbacks = [
-        LearningRateMonitor(logging_interval="step")
+        LearningRateMonitor(logging_interval="step"),
+        EpochCheckpointCallback(save_dir=cfg.log_dir)
     ]
     
     # Setup SwanLab logger
@@ -169,10 +193,16 @@ def main():
     trainer.fit(model, datamodule=data_module)
     log_message("SUCCESS", "Training completed successfully", color="green")
     
-    # Save training artifacts (only on rank 0)
+    # Save final training artifacts to current path (only on rank 0)
     from src.llm.trainer import _is_rank_0
     if _is_rank_0():
-        log_message("INFO", "Rank 0: Saving training artifacts", color="green")
+        # Save final results to current path as requested
+        final_save_path = os.path.join(os.getcwd(), "output")
+        log_message("INFO", "Rank 0: Saving final training artifacts to current path", color="green")
+        save_training_artifacts(model, final_save_path, cfg)
+
+        # Also save to log_dir for compatibility
+        log_message("INFO", "Rank 0: Saving training artifacts to log_dir", color="green")
         save_training_artifacts(model, cfg.log_dir, cfg)
     else:
         log_message("INFO", f"Non-rank 0: Skipping save", color="yellow")

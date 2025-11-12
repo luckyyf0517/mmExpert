@@ -80,7 +80,7 @@ def load_non_lora_trainables(model, checkpoint_path, require_grad_metadata=True)
         raise RuntimeError(f"Failed to load non-LoRA parameters: {e}") from e
 
 
-def save_training_artifacts(model, output_dir, cfg=None):
+def save_training_artifacts(model, output_dir, cfg=None, verbose=True):
     """Save LoRA adapter and non-LoRA trainable parameters (reference code approach)
 
     Args:
@@ -94,7 +94,8 @@ def save_training_artifacts(model, output_dir, cfg=None):
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
-    log_message("INFO", f"Saving training artifacts to {output_dir}", color="green")
+    if verbose:
+        log_message("INFO", f"Saving training artifacts to {output_dir}", color="green")
 
     # Save complete training configuration if provided
     if cfg is not None:
@@ -115,7 +116,8 @@ def save_training_artifacts(model, output_dir, cfg=None):
             config_dict = config_to_dict(cfg)
             with open(os.path.join(output_dir, "training_config.json"), 'w') as f:
                 json.dump(config_dict, f, indent=2, default=str)
-            log_message("CONFIG", f"Complete training configuration saved (training_config.json)", color="blue")
+            if verbose:
+                log_message("CONFIG", f"Complete training configuration saved (training_config.json)", color="blue")
         except Exception as e:
             log_message("WARNING", f"Failed to save training configuration: {e}", color="yellow")
 
@@ -131,7 +133,8 @@ def save_training_artifacts(model, output_dir, cfg=None):
 
     # Save LoRA adapter with filtered parameters
     save_file(filtered_lora_state_dict, os.path.join(output_dir, "adapter_model.safetensors"))
-    log_message("SUCCESS", f"LoRA adapter saved: {len(filtered_lora_state_dict)} parameters", color="blue")
+    if verbose:
+        log_message("SUCCESS", f"LoRA adapter saved: {len(filtered_lora_state_dict)} parameters", color="blue")
 
     # Save PEFT config manually (since we're not using save_pretrained anymore)
     adapter_config = model.model.peft_config['default'].to_dict()
@@ -150,7 +153,8 @@ def save_training_artifacts(model, output_dir, cfg=None):
     adapter_config = make_json_serializable(adapter_config)
     with open(os.path.join(output_dir, "adapter_config.json"), 'w') as f:
         json.dump(adapter_config, f, indent=2)
-    log_message("CONFIG", f"LoRA config saved (adapter_config.json)", color="blue")
+    if verbose:
+        log_message("CONFIG", f"LoRA config saved (adapter_config.json)", color="blue")
 
     # Save non-LoRA trainable parameters (matching reference code exactly)
     # This includes mm_projection_layers and other trainable parameters
@@ -162,19 +166,22 @@ def save_training_artifacts(model, output_dir, cfg=None):
     for name, param in model.model.named_parameters():
         if "lora_" not in name and param.requires_grad:
             non_lora_state_dict[name] = model_state_dict[name].contiguous()
-            log_message("INFO", f"  Including non-LoRA trainable param: {name} (shape: {param.shape})", color="green")
+            if verbose:
+                log_message("INFO", f"  Including non-LoRA trainable param: {name} (shape: {param.shape})", color="green")
 
     # Save non-LoRA parameters
     save_file(non_lora_state_dict, os.path.join(output_dir, "non_lora_trainables.safetensors"))
-    log_message("SUCCESS", f"Non-LoRA trainable parameters saved: {len(non_lora_state_dict)} parameters", color="green")
+    if verbose:
+        log_message("SUCCESS", f"Non-LoRA trainable parameters saved: {len(non_lora_state_dict)} parameters", color="green")
 
     # Calculate sizes (use filtered LoRA parameters)
     lora_size = sum(p.numel() * p.element_size() for p in filtered_lora_state_dict.values()) / 1024 / 1024
     non_lora_size = sum(p.numel() * p.element_size() for p in non_lora_state_dict.values()) / 1024 / 1024
 
-    log_message("INFO", f"LoRA adapter size: {lora_size:.2f} MB", color="green")
-    log_message("INFO", f"Non-LoRA trainable size: {non_lora_size:.2f} MB", color="green")
-    log_message("SUCCESS", f"Training artifacts saved successfully! Total: {lora_size + non_lora_size:.2f} MB", color="green")
+    if verbose:
+        log_message("INFO", f"LoRA adapter size: {lora_size:.2f} MB", color="green")
+        log_message("INFO", f"Non-LoRA trainable size: {non_lora_size:.2f} MB", color="green")
+        log_message("SUCCESS", f"Training artifacts saved successfully! Total: {lora_size + non_lora_size:.2f} MB", color="green")
 
 
 def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
