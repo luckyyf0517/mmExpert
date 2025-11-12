@@ -45,6 +45,8 @@ def parse_args():
                         help='Batch size for training (overrides config file)')
     parser.add_argument('--num_workers', type=int, default=None,
                         help='Number of data loading workers (overrides config file)')
+    parser.add_argument('--use_random_question', type=lambda x: x.lower() == 'true', default=None,
+                        help='Whether to use random question selection (true/false, overrides config file)')
     parser.add_argument('--max_epochs', type=int, default=None,
                         help='Maximum number of training epochs (overrides config file)')
     parser.add_argument('--max_steps', type=int, default=None,
@@ -91,6 +93,7 @@ def main():
         log_message("CONFIG", f"Using train_split from command line: {args.split}", color="blue")
     override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     override_config(cfg.data_cfg, 'num_workers', args.num_workers, 'num_workers')
+    override_config(cfg.data_cfg, 'use_random_question', args.use_random_question, 'use_random_question')
     override_config(cfg.training, 'max_epochs', args.max_epochs, 'max_epochs')
     override_config(cfg.training, 'gradient_accumulation_steps', args.gradient_accumulation_steps, 'gradient_accumulation_steps')
 

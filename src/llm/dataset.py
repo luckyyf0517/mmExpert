@@ -32,8 +32,6 @@ DEFAULT_REAL_CONFIG = {
     'max_motion_length': 496,
     'min_motion_len': 96,
     'unit_length': 16,
-    'raw': True,
-    'thresholding': True,
     'normalize': 'per_frame',  # 'none', 'per_frame', 'global', or 'log'
 }
 
@@ -52,21 +50,15 @@ DEFAULT_QUESTION_PROMPTS = [
 ]
 
 
-# NOTE: The following functions have been removed as they were unused:
-# - DataCollatorForWaveTextDataset: Collation is handled by datamodule.py
-# - preprocess_multimodal_wave: Preprocessing is handled by datamodule.py
-# - preprocess: Label masking logic is in datamodule.py (with correct +1 fix)
-# - make_object_wave_data_module: DataModule pattern is used instead
-
-
 class WaveCaptionDataset(Dataset):
     """Dataset for wave caption tasks with multimodal support."""
     
-    def __init__(self, data_root=None, split="train", tokenizer=None, caption_only=None) -> None:
+    def __init__(self, data_root=None, split="train", tokenizer=None, caption_only=None, use_random_question=True) -> None:
         super(WaveCaptionDataset, self).__init__()
         self.data_root = data_root
         self.split = split
         self.tokenizer = tokenizer
+        self.use_random_question = use_random_question
         self.opt = self._load_config(data_root, split)
 
         # Override caption_only if provided
@@ -207,10 +199,16 @@ class WaveCaptionDataset(Dataset):
         """Return number of utterances."""
         return len(self.data)
     
-    @staticmethod
-    def default_question():
-        """Get a random default question from predefined prompts."""
-        return random.choice(DEFAULT_QUESTION_PROMPTS)
+    def default_question(self):
+        """Get a default question from predefined prompts.
+        
+        If use_random_question is True, returns a random question.
+        Otherwise, returns the first question in the list.
+        """
+        if self.use_random_question:
+            return random.choice(DEFAULT_QUESTION_PROMPTS)
+        else:
+            return DEFAULT_QUESTION_PROMPTS[0]
         
     @staticmethod
     def format_caption(question, answer):

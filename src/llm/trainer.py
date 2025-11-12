@@ -18,6 +18,8 @@ from src.llm.utils.trainer_debug_utils import (
 
 import warnings
 warnings.filterwarnings('ignore', message='.*Found .* module.*in eval mode.*')
+warnings.filterwarnings('ignore', message='.*Could not find a config file in.*')
+warnings.filterwarnings('ignore', message='.*will assume that the vocabulary was not modified.*')
 
 
 def _is_rank_0():

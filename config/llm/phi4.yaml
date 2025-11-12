@@ -35,6 +35,9 @@ data_cfg:
   conversation_template: "conv_phi3"
   mm_use_wave_start_end: true
   wave_token_len: 248
+  
+  # Question selection strategy: true for random choice, false for first question
+  use_random_question: true
 
 training:
   learning_rate: 5e-4

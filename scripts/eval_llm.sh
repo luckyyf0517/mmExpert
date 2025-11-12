@@ -10,4 +10,5 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --config ${CONFIG} \
     --data_root ${DATA_ROOT} \
     --batch_size 4 \
-    --split test 
+    --split test \
+    --use_random_question true

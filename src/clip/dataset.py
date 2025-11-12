@@ -252,8 +252,6 @@ if __name__ == "__main__":
         'max_motion_length': 496,
         'min_motion_len': 96,
         'unit_length': 16,
-        'raw': True,
-        'thresholding': True
     })
     
     # Use actual dataset file
