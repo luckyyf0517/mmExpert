@@ -11,4 +11,4 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --data_root ${DATA_ROOT} \
     --batch_size 4 \
     --split test \
-    --use_random_question true
+    --use_random_question_for_caption false

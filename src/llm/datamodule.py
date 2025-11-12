@@ -252,7 +252,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
             split=split,
             tokenizer=self.tokenizer,
             caption_only=self.cfg.get('caption_only', None),
-            use_random_question=self.cfg.get('use_random_question', True)
+            use_random_question_for_caption=self.cfg.get('use_random_question_for_caption', True)
         )
         
         # Create a wrapper dataset that processes items on-the-fly

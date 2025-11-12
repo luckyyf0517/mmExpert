@@ -37,7 +37,7 @@ data_cfg:
   wave_token_len: 248
   
   # Question selection strategy: true for random choice, false for first question
-  use_random_question: true
+  use_random_question_for_caption: true
 
 training:
   learning_rate: 5e-4

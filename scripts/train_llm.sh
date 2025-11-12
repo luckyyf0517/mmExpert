@@ -17,4 +17,4 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --zero_stage 2 \
     --dtype bf16 \
     --split train \
-    --use_random_question false
+    --use_random_question_for_caption true

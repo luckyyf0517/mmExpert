@@ -53,12 +53,12 @@ DEFAULT_QUESTION_PROMPTS = [
 class WaveCaptionDataset(Dataset):
     """Dataset for wave caption tasks with multimodal support."""
     
-    def __init__(self, data_root=None, split="train", tokenizer=None, caption_only=None, use_random_question=True) -> None:
+    def __init__(self, data_root=None, split="train", tokenizer=None, caption_only=None, use_random_question_for_caption=True) -> None:
         super(WaveCaptionDataset, self).__init__()
         self.data_root = data_root
         self.split = split
         self.tokenizer = tokenizer
-        self.use_random_question = use_random_question
+        self.use_random_question_for_caption = use_random_question_for_caption
         self.opt = self._load_config(data_root, split)
 
         # Override caption_only if provided
@@ -144,12 +144,13 @@ class WaveCaptionDataset(Dataset):
                     processed_data.extend(data_items)
             elif 'test' in self.split:
                 if self.opt.get('caption_only'):
-                    qa_caption = caption_qas[0]
+                    qa_caption = caption_qas[0] # all captions are combined with '#'
                     processed_data.extend(self._create_data_items(data[i], qa_caption))
                 else: 
                     if question_qas:
-                        qa_question = random.choice(question_qas)
-                        processed_data.extend(self._create_data_items(data[i], qa_question))
+                        for qa in question_qas:
+                            data_items = self._create_data_items(data[i], qa)
+                            processed_data.extend(data_items)
                     else: 
                         raise ValueError(f"No question QAs available for {data[i]}")
             else: 
@@ -174,8 +175,6 @@ class WaveCaptionDataset(Dataset):
         questions = list(data_item['questions'].values()) if 'questions' in data_item else []
         
         if 'test' in self.split and questions:
-            return [random.choice(questions)]
-        else:
             return questions
     
     def _create_data_items(self, data_item, qa):
@@ -199,10 +198,10 @@ class WaveCaptionDataset(Dataset):
     def default_question(self):
         """Get a default question from predefined prompts.
         
-        If use_random_question is True, returns a random question.
+        If use_random_question_for_caption is True, returns a random question.
         Otherwise, returns the first question in the list.
         """
-        if self.use_random_question:
+        if self.use_random_question_for_caption:
             return random.choice(DEFAULT_QUESTION_PROMPTS)
         else:
             return DEFAULT_QUESTION_PROMPTS[0]

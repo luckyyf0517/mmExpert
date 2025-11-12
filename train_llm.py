@@ -45,7 +45,7 @@ def parse_args():
                         help='Batch size for training (overrides config file)')
     parser.add_argument('--num_workers', type=int, default=None,
                         help='Number of data loading workers (overrides config file)')
-    parser.add_argument('--use_random_question', type=lambda x: x.lower() == 'true', default=None,
+    parser.add_argument('--use_random_question_for_caption', type=lambda x: x.lower() == 'true', default=None,
                         help='Whether to use random question selection (true/false, overrides config file)')
     parser.add_argument('--max_epochs', type=int, default=None,
                         help='Maximum number of training epochs (overrides config file)')
@@ -93,7 +93,7 @@ def main():
         log_message("CONFIG", f"Using train_split from command line: {args.split}", color="blue")
     override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
     override_config(cfg.data_cfg, 'num_workers', args.num_workers, 'num_workers')
-    override_config(cfg.data_cfg, 'use_random_question', args.use_random_question, 'use_random_question')
+    override_config(cfg.data_cfg, 'use_random_question_for_caption', args.use_random_question_for_caption, 'use_random_question_for_caption')
     override_config(cfg.training, 'max_epochs', args.max_epochs, 'max_epochs')
     override_config(cfg.training, 'gradient_accumulation_steps', args.gradient_accumulation_steps, 'gradient_accumulation_steps')
 
@@ -199,11 +199,6 @@ def main():
     # Save final training artifacts to current path (only on rank 0)
     from src.llm.trainer import _is_rank_0
     if _is_rank_0():
-        # Save final results to current path as requested
-        final_save_path = os.path.join(os.getcwd(), "output")
-        log_message("INFO", "Rank 0: Saving final training artifacts to current path", color="green")
-        save_training_artifacts(model, final_save_path, cfg)
-
         # Also save to log_dir for compatibility
         log_message("INFO", "Rank 0: Saving training artifacts to log_dir", color="green")
         save_training_artifacts(model, cfg.log_dir, cfg)

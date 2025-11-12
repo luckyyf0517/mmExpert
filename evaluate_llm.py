@@ -45,7 +45,7 @@ def main():
                         help="Dataset split to evaluate (overrides config file)")
     parser.add_argument("--batch_size", type=int, default=None,
                         help="Batch size for evaluation (overrides config file)")
-    parser.add_argument("--use_random_question", type=lambda x: x.lower() == 'true', default=None,
+    parser.add_argument("--use_random_question_for_caption", type=lambda x: x.lower() == 'true', default=None,
                         help="Whether to use random question selection (true/false, overrides config file)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
@@ -112,7 +112,7 @@ def main():
             log_message("CONFIG", f"Split '{args.split}' doesn't contain 'QA', setting caption_only=True", color="blue")
     if args.batch_size is not None:
         override_config(cfg.data_cfg, 'batch_size', args.batch_size, 'batch_size')
-    override_config(cfg.data_cfg, 'use_random_question', args.use_random_question, 'use_random_question')
+    override_config(cfg.data_cfg, 'use_random_question_for_caption', args.use_random_question_for_caption, 'use_random_question_for_caption')
 
     # Add generate parameters to config
     cfg.generation = EasyDict({
