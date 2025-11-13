@@ -5,6 +5,7 @@ import os
 import warnings
 from datetime import datetime
 from termcolor import colored
+from copy import deepcopy
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DeepSpeedStrategy
@@ -140,12 +141,13 @@ def main():
 
     # Create model (LightningModule)
     # Pass model_cfg with training config added
-    model_cfg_dict = dict(cfg.model_cfg)
-    model_cfg_dict['training'] = EasyDict(cfg.training)
-    model_cfg_with_training = EasyDict(model_cfg_dict)
+    model_cfg_with_training = deepcopy(cfg.model_cfg)
+    model_cfg_with_training.training = cfg.training
+    model_cfg_with_training.data_cfg = cfg.data_cfg
+    
     # Add debug flag to model config
     model_cfg_with_training.debug = args.debug
-    model = WaveLLMTrainer(model_cfg_with_training)
+    model = WaveLLMTrainer(model_cfg_with_training.to_dict())
 
     class EpochCheckpointCallback(pl.Callback):
         """Save adapter and non-LoRA weights after each epoch"""

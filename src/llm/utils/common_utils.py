@@ -184,6 +184,81 @@ def save_training_artifacts(model, output_dir, cfg=None, verbose=True):
         log_message("SUCCESS", f"Training artifacts saved successfully! Total: {lora_size + non_lora_size:.2f} MB", color="green")
 
 
+def check_config_consistency(training_cfg, current_cfg, strict=False):
+    """Check consistency between training and evaluation configurations
+    
+    Args:
+        training_cfg: Configuration loaded from training_config.json
+        current_cfg: Current configuration for evaluation
+        strict: If True, raise error on mismatch; if False, only warn
+    
+    Returns:
+        bool: True if configurations are consistent, False otherwise
+    """
+    from src.logger import log_message
+    
+    # Helper function to get all nested keys and values from config
+    def get_all_nested_values(cfg, prefix=""):
+        """Recursively get all nested keys and values from config"""
+        result = {}
+        
+        if hasattr(cfg, '__dict__'):
+            # Handle objects with __dict__ (like EasyDict)
+            items = vars(cfg).items()
+        elif isinstance(cfg, dict):
+            # Handle dictionaries
+            items = cfg.items()
+        else:
+            # Handle primitive values
+            return {prefix: cfg}
+        
+        for key, value in items:
+            new_prefix = f"{prefix}.{key}" if prefix else key
+            if isinstance(value, (dict, EasyDict)) or (hasattr(value, '__dict__') and not isinstance(value, (str, int, float, bool, list))):
+                # Recursively process nested objects
+                result.update(get_all_nested_values(value, new_prefix))
+            else:
+                # Store primitive values
+                result[new_prefix] = value
+        
+        return result
+    
+    # Get all nested values from both configs
+    training_values = get_all_nested_values(training_cfg)
+    current_values = get_all_nested_values(current_cfg)
+    
+    # Find all keys from both configs
+    all_keys = set(training_values.keys()).union(set(current_values.keys()))
+    
+    is_consistent = True
+    mismatches = []
+    
+    # Check all keys
+    for key_path in sorted(all_keys):
+        training_value = training_values.get(key_path, "MISSING")
+        current_value = current_values.get(key_path, "MISSING")
+        
+        if training_value != current_value:
+            mismatches.append(f"  {key_path}: training={training_value}, current={current_value}")
+            is_consistent = False
+    
+    # Report results
+    if not is_consistent:
+        log_message("WARNING", "Configuration mismatches detected:", color="yellow")
+        for mismatch in mismatches:
+            log_message("WARNING", mismatch, color="yellow")
+        
+        if strict:
+            log_message("ERROR", "Configuration mismatches found in strict mode. Aborting.", color="red")
+            raise ValueError("Configuration mismatch between training and evaluation")
+        else:
+            log_message("WARNING", "Continuing with evaluation despite configuration mismatches.", color="yellow")
+    else:
+        log_message("SUCCESS", "Configuration consistency check passed", color="green")
+    
+    return is_consistent
+
+
 def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
     """Load model from LoRA adapter checkpoint"""
     from src.llm.utils.config_loader import load_yaml_config
@@ -199,6 +274,21 @@ def load_model_from_checkpoint(checkpoint_path, config_path, data_root=None):
     if data_root:
         cfg.data_cfg.data_root = data_root
         cfg.model_cfg.encoder_path = data_root
+
+    # Check for training_config.json in checkpoint directory
+    training_config_path = os.path.join(checkpoint_path, "training_config.json")
+    if os.path.exists(training_config_path):
+        log_message("INFO", f"Loading training configuration from {training_config_path}", color="blue")
+        with open(training_config_path, 'r') as f:
+            training_cfg = json.load(f)
+        
+        # Convert to EasyDict for consistency
+        training_cfg = EasyDict(training_cfg)
+        
+        # Check configuration consistency
+        check_config_consistency(training_cfg, cfg)
+    else:
+        log_message("WARNING", f"Training configuration not found at {training_config_path}", color="yellow")
 
     # Prepare model config (same as training)
     model_cfg_dict = dict(cfg.model_cfg)

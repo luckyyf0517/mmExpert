@@ -20,4 +20,4 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --data_root ${DATA_ROOT} \
     --batch_size 4 \
     --test_split "dataset/HumanML3D/_split/test.json" \
-    --use_random_question_for_caption true
+    --use_random_question_for_caption false

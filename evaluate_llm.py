@@ -8,6 +8,7 @@ import numpy as np
 from termcolor import colored
 import pytorch_lightning as pl
 from easydict import EasyDict
+import glob
 
 from src.llm.utils.config_loader import load_yaml_config
 from src.llm.datamodule import WaveLLMDataModule
@@ -33,8 +34,8 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate mmwave+LLM model with LoRA adapter")
 
     # Required arguments
-    parser.add_argument("--model_checkpoint", type=str, required=True,
-                        help="Path to LoRA adapter directory (contains adapter_model.bin)")
+    parser.add_argument("--model_checkpoint", type=str, default=None,
+                        help="Path to LoRA adapter directory (contains adapter_model.bin). If not specified, will use the latest checkpoint in output/ directory")
     parser.add_argument("--config", type=str, required=True,
                         help="Path to YAML configuration file (same as training)")
     parser.add_argument("--data_root", type=str, default=None,
@@ -87,13 +88,31 @@ def main():
 
     # Check checkpoint path
     checkpoint_path = args.model_checkpoint
-    if not os.path.exists(checkpoint_path):
-        print(colored("[ERROR]", "red") + f" Checkpoint path not found: {checkpoint_path}")
-        return
-    
-    if not os.path.isdir(checkpoint_path):
-        print(colored("[ERROR]", "red") + f" Checkpoint path must be a directory: {checkpoint_path}")
-        return
+    if checkpoint_path is None:
+        # Find the latest checkpoint in the output directory
+        output_dir = "output"
+        if not os.path.exists(output_dir):
+            print(colored("[ERROR]", "red") + f" Output directory not found: {output_dir}")
+            return
+        
+        # Get all directories in output_dir
+        checkpoint_dirs = [d for d in os.listdir(output_dir) if os.path.isdir(os.path.join(output_dir, d))]
+        if not checkpoint_dirs:
+            print(colored("[ERROR]", "red") + f" No checkpoint directories found in {output_dir}")
+            return
+        
+        # Sort by modification time to get the latest checkpoint
+        latest_checkpoint_dir = max(checkpoint_dirs, key=lambda x: os.path.getmtime(os.path.join(output_dir, x)))
+        checkpoint_path = os.path.join(output_dir, latest_checkpoint_dir)
+        print(colored("[INFO]", "green") + f" Using latest checkpoint from {checkpoint_path}")
+    else:
+        if not os.path.exists(checkpoint_path):
+            print(colored("[ERROR]", "red") + f" Checkpoint path not found: {checkpoint_path}")
+            return
+        
+        if not os.path.isdir(checkpoint_path):
+            print(colored("[ERROR]", "red") + f" Checkpoint path must be a directory: {checkpoint_path}")
+            return
 
     # Check if config file exists
     if not os.path.exists(args.config):
