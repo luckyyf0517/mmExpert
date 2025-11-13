@@ -152,9 +152,20 @@ class Text2DopplerDatasetV2():
     def _load_data(self, split_file, data_scale):
         """Load and scale dataset."""
         data_dict = json.load(open(split_file, 'r'))
-        data_amount = int(len(data_dict) * data_scale)
-        log_message("DATASET", f"Total number of data {data_amount} (scale factor: {data_scale}) from {split_file}", color="blue")
-        return list(data_dict.values())[:data_amount]
+        
+        data_list = list(data_dict.values())
+        data_list_ = []
+        for data_item in data_list:
+            for caption in data_item['captions']:
+                data_item_ = deepcopy(data_item)
+                data_item_['caption'] = caption
+                del data_item_['captions']
+                data_list_.append(data_item_)
+        
+        data_amount = int(len(data_list_) * data_scale)
+        data_list_ = random.sample(data_list_, data_amount)
+        log_message("DATASET", f"Total number of data {len(data_list_)} (scale factor: {data_scale}) from {split_file}", color="blue")
+        return data_list_
 
     def _get_radar_path(self, data_dict):
         """Get radar NPZ file path."""
@@ -166,13 +177,8 @@ class Text2DopplerDatasetV2():
         return os.path.join(motion_folder, f'{motion_index}.npz')
 
     def _process_caption(self, data_dict):
-        """Process caption text with person synonym replacement."""
-        if 'captions' in data_dict:
-            text_list = data_dict['captions']
-            caption = random.choice(text_list)
-            caption = caption.replace('person', random.choice(self.PERSON_SYNONYMS))
-        else: 
-            caption = ''
+        """TODO: Process caption text with person synonym replacement."""
+        caption = data_dict['caption']
         return caption.lower()
 
     def _create_item_dict(self, data_dict, motion_path, radar_data):

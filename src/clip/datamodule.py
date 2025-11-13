@@ -71,8 +71,6 @@ class HumanDInterface(DInterface):
         opt = deepcopy(self.cfg.opt)
         if isinstance(split, str):
             return Text2DopplerDatasetV2(opt, split, scale)
-        elif len(split) == 0: 
-            return Text2DopplerDatasetV2(opt, split[0], scale[0])
         else:
             return ConcatDataset([Text2DopplerDatasetV2(opt, split_, scale_) for split_, scale_ in zip(split, scale)])
     
