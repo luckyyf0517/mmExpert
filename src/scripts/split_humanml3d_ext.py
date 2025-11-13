@@ -37,9 +37,9 @@ def validate_radar_data(radar_data):
     if not (range_T == doppler_T == azimuth_T):
         return False
 
-    # Check length constraints
-    if range_T < MIN_MOTION_LEN or range_T >= MAX_MOTION_LEN:
-        return False
+    # # Check length constraints
+    # if range_T < MIN_MOTION_LEN or range_T >= MAX_MOTION_LEN:
+    #     return False
 
     # Check for invalid data (NaN or Inf) in all views
     for view_name, view_data in radar_data.items():

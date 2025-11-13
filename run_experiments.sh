@@ -26,7 +26,7 @@ for config in "${CONFIGS[@]}"; do
     config_name=$(basename "$config" .yaml)
     echo "Running: $config"
     
-    torchrun --nproc_per_node=2 run_clip.py \
+    torchrun --nproc_per_node=2 train_clip.py \
         --model-config "$CONFIG_DIR/$config"
     
     if [ $? -eq 0 ]; then
