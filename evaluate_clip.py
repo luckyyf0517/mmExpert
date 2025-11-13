@@ -32,13 +32,14 @@ from easydict import EasyDict as edict
 import pytorch_lightning as pl
 
 class CLIPEvaluator:
-    def __init__(self, model_path=None, config_path=None, version_path=None, device='cuda', debug=False, batch_size=None):
+    def __init__(self, model_path=None, config_path=None, version_path=None, device='cuda', debug=False, batch_size=None, test_split=None):
         self.device = device
         self.model_path = model_path
         self.config_path = config_path
         self.version_path = version_path
         self.debug = debug
         self.override_batch_size = batch_size
+        self.override_test_split = test_split
         self.version_dir = None  # Store resolved version directory path
 
         # Handle version path option
@@ -294,6 +295,12 @@ class CLIPEvaluator:
             original_batch_size = data_cfg['params']['cfg']['batch_size']
             data_cfg['params']['cfg']['batch_size'] = self.override_batch_size
             log_message("INFO", f"Overriding batch size: {original_batch_size} → {self.override_batch_size}", color="green")
+
+        # Override test split if specified
+        if self.override_test_split is not None:
+            # test_split is always a list, replace the first element
+            data_cfg['params']['cfg']['test_split'][0] = self.override_test_split
+            log_message("INFO", f"Overriding test split: {self.override_test_split}", color="green")
 
         data_interface = HumanDInterface(data_cfg['params']['cfg'])
         data_interface.setup('test')
@@ -621,6 +628,8 @@ def main():
                         help='Enable debug mode to show detailed prediction results for each batch')
     parser.add_argument('--batch_size', type=int, default=None,
                         help='Override batch size for evaluation (default: use config file value)')
+    parser.add_argument('--test_split', type=str, default=None,
+                        help='Override the default test split path (e.g., dataset/HumanML3D/_split/test.json)')
 
     args = parser.parse_args()
 
@@ -631,7 +640,8 @@ def main():
         version_path=args.version,
         device=args.device,
         debug=args.debug,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        test_split=args.test_split
     )
 
     # Determine output path

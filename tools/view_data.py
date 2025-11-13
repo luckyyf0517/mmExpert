@@ -6,6 +6,7 @@ Loads data using actual dataset configuration and preprocessing pipeline.
 
 import os
 import sys
+from cv2.gapi import BGR2RGB, BGR2Gray
 import torch
 import numpy as np
 import argparse
@@ -102,9 +103,6 @@ def create_beautiful_summary_plt(wave_data, caption, sample_idx, preview_dir):
             data_norm = ((data - data.min()) / (data.max() - data.min()) * 255).astype(np.uint8)
 
             # Apply rainbow colormap
-            # Create colored image with 3 channels
-            colored_spectrum = np.zeros((max_height, max_width, 3), dtype=np.uint8)
-
             # Create a square canvas with max dimensions
             canvas = np.zeros((max_height, max_width), dtype=np.uint8)
 
@@ -114,8 +112,9 @@ def create_beautiful_summary_plt(wave_data, caption, sample_idx, preview_dir):
 
             # Place the normalized spectrum in the center
             canvas[y_offset:y_offset + data.shape[0], x_offset:x_offset + data.shape[1]] = data_norm
+            canvas = 255 - canvas
 
-            # Apply rainbow colormap to the canvas
+            # Apply rainbow colormap to grayscale canvas to create colored image
             colored_canvas = cv2.applyColorMap(canvas, cv2.COLORMAP_RAINBOW)
 
             processed_spectra.append(colored_canvas)
