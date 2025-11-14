@@ -24,9 +24,10 @@ from ..core.factory import auto_factory
 
 class ViewEncoder(nn.Module):
     """Vision Transformer encoder for a single radar view."""
-    
+
     def __init__(self, vit_model_name: str, patch_sz: Tuple[int, int],
-                 target_sz: Tuple[int, int], freeze_bb: bool, max_seq_len: int):
+                 target_sz: Tuple[int, int], freeze_bb: bool, max_seq_len: int,
+                 use_repeat_in_chans: bool = True):
         super().__init__()
 
         # Handle rectangular patches properly
@@ -53,8 +54,11 @@ class ViewEncoder(nn.Module):
             pretrained=True,
             num_classes=0,  # Remove classification head
             img_size=target_sz,
-            patch_size=tuple(self.patch_size)  # Use rectangular patch size
+            patch_size=tuple(self.patch_size),  # Use rectangular patch size
+            in_chans=1 if not use_repeat_in_chans else 3  # Set input channels based on use_repeat_in_chans
         )
+
+        self.use_repeat_in_chans = use_repeat_in_chans
         self.target_size = target_sz
         self.embed_dim = self.vit.embed_dim
         self.max_sequence_length = max_seq_len  # Store max sequence length
@@ -69,8 +73,15 @@ class ViewEncoder(nn.Module):
         # At this point, self.patch_size is guaranteed to be a list of 2 integers
         expected_patches = (target_sz[0] // self.patch_size[0]) * (target_sz[1] // self.patch_size[1])
 
-        # Use adaptive average pooling to standardize number of patches
-        self.adaptive_pool = nn.AdaptiveAvgPool1d(self.max_sequence_length)
+        # ViT outputs include CLS token, so total tokens = patches + 1
+        total_tokens = expected_patches + 1
+
+        # Verify that max_sequence_length matches the expected number of patches (excluding CLS)
+        if max_seq_len != expected_patches:
+            raise ValueError(
+                f"max_sequence_length ({max_seq_len}) does not match expected number of patches ({expected_patches}). "
+                f"Target size: {target_sz}, Patch size: {self.patch_size}"
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -93,19 +104,12 @@ class ViewEncoder(nn.Module):
             x, size=self.target_size, mode='bilinear', align_corners=False
         )
 
-        # Ensure 3-channel input for pretrained ViT (replicate grayscale)
-        if x.size(1) == 1:
-            x = x.repeat(1, 3, 1, 1)
+        # Ensure correct number of input channels
+        if x.size(1) == 1 and self.use_repeat_in_chans:
+            x = x.repeat(1, 3, 1, 1)  # Replicate grayscale to 3 channels only if use_repeat_in_chans is True
 
-        # Extract features using ViT forward_features to get patch tokens
-        features = self.vit.forward_features(x)  # [batch_size, num_patches, embed_dim]
-
-        # Standardize number of patches if needed
-        if features.size(1) != self.max_sequence_length:
-            # Transpose for adaptive pooling
-            features = features.transpose(1, 2)  # [batch_size, embed_dim, num_patches]
-            features = self.adaptive_pool(features)  # [batch_size, embed_dim, target_patches]
-            features = features.transpose(1, 2)  # [batch_size, target_patches, embed_dim]
+        # Extract features using ViT forward_features to get patch tokens (includes CLS token)
+        features = self.vit.forward_features(x)  # [batch_size, num_patches+1, embed_dim]
 
         return features
 
@@ -135,9 +139,11 @@ class RadarEncoderViT(BaseEncoder):
                  vit_model: str = "vit_base_patch16_224",
                  freeze_backbone: bool = False,
                  use_layer_norm: bool = True,
+                 use_repeat_in_chans: bool = True,
+                 pool_type: str = "avg",  # "avg" (default, excludes CLS token), "token", "max"
                  patch_size_range: list = [32, 16], # [height, width] for range view
                  patch_size_other: list = [16, 16], # [height, width] for other views
-                 max_sequence_length: int = 196,  # 14x14 patches for 224x224 input
+                 max_sequence_length: int = 248,  # Matches: 256×496 with patch size [256,2] or 128×496 with patch size [128,2]
                  **kwargs):
         """
         Initialize Vision Transformer radar encoder.
@@ -149,6 +155,8 @@ class RadarEncoderViT(BaseEncoder):
             vit_model: Name of the ViT model from timm
             freeze_backbone: Whether to freeze the ViT backbone
             use_layer_norm: Whether to use layer normalization
+            use_repeat_in_chans: Whether to repeat single-channel input to 3 channels (True) or use 1-channel ViT (False)
+            pool_type: Type of pooling to use ("avg" (default, excludes CLS token), "token", "max").
             patch_size_range: Patch size for range-time view [height, width] - rectangular for 256×T input
             patch_size_other: Patch size for doppler/azimuth views [height, width] - square for 128×T input
             max_sequence_length: Maximum sequence length for positional encoding
@@ -172,6 +180,8 @@ class RadarEncoderViT(BaseEncoder):
         self.vit_model = vit_model
         self.freeze_backbone = freeze_backbone
         self.use_layer_norm = use_layer_norm
+        self.use_repeat_in_chans = use_repeat_in_chans
+        self.pool_type = pool_type
         self.patch_size_range = patch_size_range
         self.patch_size_other = patch_size_other
         self.max_sequence_length = max_sequence_length
@@ -189,7 +199,7 @@ class RadarEncoderViT(BaseEncoder):
                 target_size = (128, 496)  # Original radar dimensions
 
             self.view_encoders[view_name] = self._create_view_encoder(
-                vit_model, patch_size, target_size, freeze_backbone, max_sequence_length
+                vit_model, patch_size, target_size, freeze_backbone, max_sequence_length, use_repeat_in_chans
             )
 
         # Get ViT feature dimension from the first encoder
@@ -247,7 +257,7 @@ class RadarEncoderViT(BaseEncoder):
 
     def _create_view_encoder(self, vit_model: str, patch_size,
                            target_size: Tuple[int, int], freeze_backbone: bool,
-                           max_sequence_length: int) -> nn.Module:
+                           max_sequence_length: int, use_repeat_in_chans: bool = True) -> nn.Module:
         """Create Vision Transformer encoder for a single radar view."""
         # Convert patch_size to tuple if it's a list
         if isinstance(patch_size, list):
@@ -257,7 +267,7 @@ class RadarEncoderViT(BaseEncoder):
         else:
             # Single value, create square patch
             patch_size_tuple = (patch_size, patch_size)
-        return ViewEncoder(vit_model, patch_size_tuple, target_size, freeze_backbone, max_sequence_length)
+        return ViewEncoder(vit_model, patch_size_tuple, target_size, freeze_backbone, max_sequence_length, use_repeat_in_chans)
 
     def _initialize_parameters(self) -> None:
         """Initialize model parameters."""
@@ -284,11 +294,15 @@ class RadarEncoderViT(BaseEncoder):
         """
         # Extract radar data
         radar_data = data.data
+        first_encoder = None
 
         # Handle different input formats
         if isinstance(radar_data, dict):
             # Multi-view format
             features = self._encode_multi_view(radar_data)
+            # Get first encoder for potential use in pooling
+            if self.view_encoders:
+                first_encoder = next(iter(self.view_encoders.values()))
         elif isinstance(radar_data, torch.Tensor):
             # Single tensor format (assume it's already processed)
             features = radar_data
@@ -299,14 +313,17 @@ class RadarEncoderViT(BaseEncoder):
         features = self.layer_norm(features)
         features = self.dropout_layer(features)
 
-        # Pool features to get final embedding
-        pooled_features = features.mean(dim=1)
+        # Apply pooling using timm's pool method
+        pooled_features = first_encoder.vit.pool(features, pool_type=self.pool_type)
 
         # Apply sequence projection if needed
         if return_sequence and features.dim() == 3:
+            # Exclude CLS token for sequence features (only patch tokens)
+            patch_features = features[:, 1:]  # Remove CLS token
+
             # Lazily create sequence projection layer when needed
             projection_layer = self._ensure_sequence_projection()
-            sequence_features = projection_layer(features)
+            sequence_features = projection_layer(patch_features)
         else:
             sequence_features = features
 
@@ -321,7 +338,8 @@ class RadarEncoderViT(BaseEncoder):
                     "sequence_length": sequence_features.size(1),
                     "embed_dim": self.embed_dim,
                     "model_type": "vit",
-                    "vit_model": self.vit_model
+                    "vit_model": self.vit_model,
+                    "pool_type": self.pool_type
                 }
             )
         else:
@@ -332,7 +350,8 @@ class RadarEncoderViT(BaseEncoder):
                     "modality": "radar",
                     "embed_dim": self.embed_dim,
                     "model_type": "vit",
-                    "vit_model": self.vit_model
+                    "vit_model": self.vit_model,
+                    "pool_type": self.pool_type
                 }
             )
 
@@ -347,6 +366,7 @@ class RadarEncoderViT(BaseEncoder):
             Encoded features
         """
         view_features = []
+        first_encoder = None
 
         # Process each available view
         for view_name, encoder in self.view_encoders.items():
@@ -363,6 +383,10 @@ class RadarEncoderViT(BaseEncoder):
                     view_data = view_data.unsqueeze(0)
                 else:
                     raise ValueError(f"Unexpected tensor dimensions for {view_name}: {view_data.dim()}")
+
+                # Store first encoder for potential use in pooling
+                if first_encoder is None:
+                    first_encoder = encoder
 
                 # Encode view using ViT
                 encoded_view = encoder(view_data)  # [batch, num_patches, embed_dim]
@@ -382,6 +406,22 @@ class RadarEncoderViT(BaseEncoder):
                 features = self.fusion_layer(features)
 
         return features
+
+    def _get_features_and_pool(self, features: torch.Tensor, encoder=None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Helper method to get both sequence features and pooled features.
+
+        Args:
+            features: Input features [batch_size, seq_len, embed_dim]
+            encoder: The encoder to use for pooling (if needed)
+
+        Returns:
+            Tuple of (pooled_features, sequence_features)
+        """
+        # Pool features based on pool_type
+        pooled_features = self._apply_pooling(features, encoder)
+
+        return pooled_features, features
 
     def _get_batch_size(self, radar_data: Dict[str, torch.Tensor]) -> int:
         """Get batch size from radar data."""
@@ -462,9 +502,11 @@ def create_radar_encoder_vit(config: EncoderConfig) -> RadarEncoderViT:
         vit_model=config.get("vit_model", "vit_base_patch16_224"),
         freeze_backbone=config.get("freeze_backbone", False),
         use_layer_norm=config.get("use_layer_norm", True),
+        use_repeat_in_chans=config.get("use_repeat_in_chans", True),
+        pool_type=config.get("pool_type", "avg"),  # Default to "avg" pooling
         patch_size_range=config.get("patch_size_range", [32, 16]),
         patch_size_other=config.get("patch_size_other", [16, 16]),
-        max_sequence_length=config.get("max_sequence_length", 196)
+        max_sequence_length=config.get("max_sequence_length", 248)
     )
 
 
