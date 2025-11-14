@@ -147,7 +147,7 @@ def main():
     
     # Add debug flag to model config
     model_cfg_with_training.debug = args.debug
-    model = WaveLLMTrainer(model_cfg_with_training.to_dict())
+    model = WaveLLMTrainer(model_cfg_with_training)
 
     class EpochCheckpointCallback(pl.Callback):
         """Save adapter and non-LoRA weights after each epoch"""
