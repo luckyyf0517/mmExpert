@@ -99,10 +99,8 @@ class ViewEncoder(nn.Module):
         elif x.dim() == 2:
             x = x.unsqueeze(0).unsqueeze(1)  # Add batch and channel dimensions
 
-        # Resize to target size
-        x = torch.nn.functional.interpolate(
-            x, size=self.target_size, mode='bilinear', align_corners=False
-        )
+        assert x.size(2) == self.target_size[0] and x.size(3) == self.target_size[1], \
+            f"Input size {x.size(2)}x{x.size(3)} does not match target size {self.target_size[0]}x{self.target_size[1]}"
 
         # Ensure correct number of input channels
         if x.size(1) == 1 and self.use_repeat_in_chans:

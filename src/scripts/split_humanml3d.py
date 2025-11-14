@@ -177,9 +177,7 @@ def main():
     # Save formatted JSON files
     print(f'Saving files to {SAVE_DIR}...')
     save_json_formatted(train_dict, f'{SAVE_DIR}/train.json')
-    save_json_formatted(test_dict, f'{SAVE_DIR}/val.json')
     save_json_formatted(test_dict, f'{SAVE_DIR}/test.json')
-    save_json_formatted(data_dict, f'{SAVE_DIR}/all.json')
 
     print('HumanML3D radar dataset processing completed successfully!')
 

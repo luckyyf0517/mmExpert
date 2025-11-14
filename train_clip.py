@@ -231,7 +231,7 @@ if __name__ == '__main__':
     except:
         pass
 
-    logger = SwanLabLogger(name=args.version, project='mmExpert')
+    logger = SwanLabLogger(name=args.version, project='mmExpert-CLIP')
     if not args.resume_checkpoint and args.rank == 0:
         for log_file in glob.glob(os.path.join(checkpoints_dir, '*.ckpt')):
             os.remove(log_file)
