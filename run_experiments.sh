@@ -27,7 +27,7 @@ for config in "${CONFIGS[@]}"; do
     echo "Running: $config"
     
     torchrun --nproc_per_node=2 train_clip.py \
-        --model-config "$CONFIG_DIR/$config"
+        --model-config "$CONFIG_DIR/$config" --data-config config/data/humanml3d_with_ext.yaml
     
     if [ $? -eq 0 ]; then
         echo -e "\033[32m[INFO]\033[0m $config completed"
