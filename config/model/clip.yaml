@@ -21,11 +21,11 @@ params:
       freeze_backbone: false
       use_layer_norm: true
       use_repeat_in_chans: true
-      pool_type: "token" 
+      pool_type: "max" 
 
       # Patch size configuration for different views
-      patch_size_range: [128, 4]
-      patch_size_other: [64, 4]
+      patch_size_range: [32, 16]
+      patch_size_other: [16, 16]
 
       # Sequence configuration
       max_sequence_length: 248

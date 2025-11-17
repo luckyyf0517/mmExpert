@@ -391,6 +391,8 @@ if __name__ == "__main__":
     parser.add_argument('--eval_bs', type=int, default=100, help='evaluation batch size')
     parser.add_argument('--use_exist', action='store_true',
                        help='Use existing merged results.json file if it exists')
+    parser.add_argument('--output_filename', type=str, default='summary_language.json',
+                       help='Output filename for language evaluation results (default: summary_language.json)')
 
     args = parser.parse_args()
 
@@ -413,10 +415,10 @@ if __name__ == "__main__":
 
     # Save evaluation results
     if os.path.isdir(input_path):
-        output_file = os.path.join(input_path, "summary_language.json")
+        output_file = os.path.join(input_path, args.output_filename)
     else:
         # For single file input, save in same directory
-        output_file = os.path.join(os.path.dirname(input_path), "summary_language.json")
+        output_file = os.path.join(os.path.dirname(input_path), args.output_filename)
 
     save_evaluation_results(results, output_file)
     print(f"\nLanguage evaluation completed successfully!")

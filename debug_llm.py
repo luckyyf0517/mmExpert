@@ -94,13 +94,13 @@ def main():
     
     set_global_seed(args.seed)
 
-    # Load model using common_utils approach
-    model, _ = load_model_from_checkpoint(
+    # Load model using common_utils approach (matching evaluate_llm.py)
+    model, cfg = load_model_from_checkpoint(
         args.model_checkpoint,
         args.config,
         args.data_root
     )
-    
+
     # Set model mode
     if args.use_train_mode:
         print(colored("[INFO]", "yellow") + " Using TRAIN mode (with dropout, matching training)")
@@ -108,26 +108,31 @@ def main():
         model.model.train()
     else:
         print(colored("[INFO]", "green") + " Using EVAL mode (no dropout)")
-        # Already in eval mode from load_model_for_debug
-        
+        # Already in eval mode from load_model_from_checkpoint
+
     model.debug_mode = True
-    
+
     # Print diagnostics AFTER setting mode
     print_model_diagnostics(model)
-    
-    # Setup data module (same as training)
-    print(colored("[LOAD]", "cyan") + f" Loading training dataset from {args.data_root}")
-    # Build dataloader (matching training)
-    cfg_yaml = load_yaml_config(args.config)
-    cfg_yaml.data_cfg.data_root = args.data_root
-    cfg_yaml.model_cfg.encoder_path = args.data_root
-    cfg_yaml.data_cfg.batch_size = args.batch_size
-    
-    # Override config with command line arguments
-    if args.split is not None:
-        cfg_yaml.data_cfg.test_split = args.split
 
-    data_module = WaveLLMDataModule(cfg_yaml.data_cfg)
+    # Setup data module (same as evaluate_llm.py)
+    print(colored("[LOAD]", "cyan") + f" Loading training dataset from {args.data_root}")
+
+    # Update config with data_root and batch_size (matching evaluate_llm.py)
+    cfg.data_cfg.data_root = args.data_root
+    cfg.data_cfg.batch_size = args.batch_size
+
+    # Override config with command line arguments (matching evaluate_llm.py)
+    if args.split is not None:
+        cfg.data_cfg.test_split = args.split
+
+    # Check if split contains "QA" - if not, set caption_only=True (matching evaluate_llm.py logic)
+    split_name = args.split if args.split else ""
+    if "QA" not in split_name:
+        cfg.data_cfg.caption_only = True
+        print(colored("[CONFIG]", "yellow") + f" Split '{split_name}' doesn't contain 'QA', setting caption_only=True")
+
+    data_module = WaveLLMDataModule(cfg.data_cfg)
     data_module.setup(stage='test')
     dataloader = data_module.test_dataloader()
     

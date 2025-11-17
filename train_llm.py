@@ -63,6 +63,12 @@ def parse_args():
     parser.add_argument('--gradient_accumulation_steps', type=int, default=None,
                         help='Gradient accumulation steps (overrides config file)')
 
+    # LoRA parameters
+    parser.add_argument('--lora_r', type=int, default=None,
+                        help='LoRA rank parameter (overrides config file)')
+    parser.add_argument('--lora_alpha', type=int, default=None,
+                        help='LoRA alpha parameter (overrides config file)')
+
     # Basic training args
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed')
@@ -122,6 +128,10 @@ def main():
     override_config(cfg.training, 'learning_rate', args.learning_rate, 'learning_rate')
     override_config(cfg.training, 'weight_decay', args.weight_decay, 'weight_decay')
     override_config(cfg.training, 'warmup_steps', args.warmup_steps, 'warmup_steps')
+
+    # Override LoRA parameters if provided
+    override_config(cfg.model_cfg.peft_config, 'r', args.lora_r, 'lora_r')
+    override_config(cfg.model_cfg.peft_config, 'lora_alpha', args.lora_alpha, 'lora_alpha')
 
     # Set seeds
     pl.seed_everything(args.seed)
