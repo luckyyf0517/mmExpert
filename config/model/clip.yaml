@@ -4,7 +4,7 @@
 target: src.clip.clip.clip_model.CLIPModel
 params:
   # Training parameters
-  max_epochs: 20
+  max_epochs: 10
   learning_rate: 1.0e-04           # Optimal: Higher learning rate performed best
   temperature: 0.10               # Optimal: Temperature 0.1 performed best
 

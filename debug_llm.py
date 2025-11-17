@@ -13,6 +13,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from termcolor import colored
+import pytorch_lightning as pl
 
 from src.llm.datamodule import WaveLLMDataModule
 from src.llm.utils.common_utils import load_model_from_checkpoint
@@ -89,9 +90,19 @@ def main():
                         help="Random seed for reproducibility")
     parser.add_argument("--split", type=str, default=None,
                         help="Dataset split to use (overrides config file)")
+    parser.add_argument("--use_random_question_for_caption", type=lambda x: x.lower() == 'true', default=None,
+                        help="Whether to use random question selection (true/false, overrides config file)")
+    
+    # Local rank argument (automatically set by DeepSpeed launcher)
+    parser.add_argument("--local_rank", type=int, default=None,
+                        help="Local rank for distributed debugging (set by DeepSpeed launcher)")
     
     args = parser.parse_args()
     
+    # Set local_rank to environment variable if provided (for DeepSpeed launcher compatibility)
+    if args.local_rank is not None:
+        os.environ['LOCAL_RANK'] = str(args.local_rank)
+
     set_global_seed(args.seed)
 
     # Load model using common_utils approach (matching evaluate_llm.py)

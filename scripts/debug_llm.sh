@@ -15,7 +15,7 @@ CONFIG=$1
 DATA_ROOT=$2
 MODEL_CHECKPOINT=$3
 MAX_STEPS=${4:-10}
-BATCH_SIZE=1
+BATCH_SIZE=6
 
 echo -e "\033[32m[INFO]\033[0m Testing checkpoint on TRAINING dataset"
 echo -e "\033[32m[INFO]\033[0m Config: ${CONFIG}"
@@ -26,10 +26,12 @@ echo -e "\033[32m[INFO]\033[0m Batch size: ${BATCH_SIZE}"
 echo ""
 
 # Run debug script (mimics training flow with bf16-mixed)
-python debug_llm.py \
+deepspeed --include localhost:0 --master_port 1234 \
+    debug_llm.py \
     --model_checkpoint ${MODEL_CHECKPOINT} \
     --config ${CONFIG} \
     --data_root ${DATA_ROOT} \
     --max_batches ${MAX_STEPS} \
-    --split dataset/HumanML3D/_split/test.json \
-    --batch_size ${BATCH_SIZE} 
+    --split dataset/HumanML3D/_split/train.json \
+    --batch_size ${BATCH_SIZE} \
+    --use_random_question_for_caption false
