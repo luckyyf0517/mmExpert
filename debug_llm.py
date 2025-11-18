@@ -135,7 +135,7 @@ def main():
 
     # Override config with command line arguments (matching evaluate_llm.py)
     if args.split is not None:
-        cfg.data_cfg.test_split = args.split
+        cfg.data_cfg.val_split = args.split
 
     # Check if split contains "QA" - if not, set caption_only=True (matching evaluate_llm.py logic)
     split_name = args.split if args.split else ""
@@ -144,8 +144,8 @@ def main():
         print(colored("[CONFIG]", "yellow") + f" Split '{split_name}' doesn't contain 'QA', setting caption_only=True")
 
     data_module = WaveLLMDataModule(cfg.data_cfg)
-    data_module.setup(stage='test')
-    dataloader = data_module.test_dataloader()
+    data_module.setup(stage='fit')
+    dataloader = data_module.val_dataloader()
     
     # Test on training data with bf16-mixed (same as training)
     print(colored("[INFO]", "green") + " Using bf16-mixed precision (matching training)")

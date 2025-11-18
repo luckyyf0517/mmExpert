@@ -16,10 +16,10 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     train_llm.py \
     --config ${CONFIG} \
     --data_root ${DATA_ROOT} \
-    --batch_size 6 \
+    --batch_size 12 \
     --num_workers 4 \
-    --max_epochs 3 \
-    --gradient_accumulation_steps 2 \
+    --max_epochs 10 \
+    --gradient_accumulation_steps 1 \
     --zero_stage 2 \
     --dtype bf16 \
     --train_split "dataset/HumanML3D/_split/train.json" \

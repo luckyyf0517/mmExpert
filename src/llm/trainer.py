@@ -282,7 +282,7 @@ class WaveLLMTrainer(pl.LightningModule):
             try:
                 question = batch['questions'][0]    
                 answer = batch['answers'][0]
-                prediction = predict_text_from_logits(self.tokenizer, outputs.logits, labels)
+                prediction = predict_text_from_logits(self.tokenizer, outputs.logits, labels, index=0)
                 log_sample_output(question, prediction, answer, prefix="FORWARD")
             except Exception as exc:
                 log_message("WARNING", f"Debug logging failed: {exc}", color="yellow")
