@@ -32,6 +32,7 @@ deepspeed --include localhost:0 --master_port 1234 \
     --config ${CONFIG} \
     --data_root ${DATA_ROOT} \
     --max_batches ${MAX_STEPS} \
-    --split dataset/HumanML3D/_split/train.json \
+    --split dataset/HumanML3D/_split/test.json \
     --batch_size ${BATCH_SIZE} \
-    --use_random_question_for_caption false
+    --use_random_question_for_caption false \
+    --use_train_mode

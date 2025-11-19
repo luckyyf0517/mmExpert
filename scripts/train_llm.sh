@@ -18,10 +18,10 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --data_root ${DATA_ROOT} \
     --batch_size 12 \
     --num_workers 4 \
-    --max_epochs 10 \
+    --max_epochs 3 \
     --gradient_accumulation_steps 1 \
     --zero_stage 2 \
     --dtype bf16 \
-    --train_split "dataset/HumanML3D/_split/train.json" \
-    --test_split "dataset/HumanML3D/_split/test.json" \
-    --use_random_question_for_caption false
+    --train_split "dataset/HumanML3D/_split/train_QAs.json" \
+    --test_split "dataset/HumanML3D/_split/test_QAs.json" \
+    --use_random_question_for_caption true
