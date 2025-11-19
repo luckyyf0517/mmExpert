@@ -262,6 +262,10 @@ def evaluate(output_path, local_rank=0, world_size=1):
         predictions = extract_prediction_list(resolve_field(outdict, ["pred", "prediction", "predictions", "pred_caption", "prediction_caption"]))
         references = extract_reference_list(resolve_field(outdict, ["gt", "answer", "answers", "caption", "captions"]))  # Already returns list format
 
+        # Extract fileindex and qa_id if available
+        fileindex = outdict.get('fileindex', None)
+        qa_id = outdict.get('qa_id', None)
+
         # Evaluate predictions (if available)
         response = ""
         correctness = 0
@@ -278,7 +282,7 @@ def evaluate(output_path, local_rank=0, world_size=1):
                 failed_calls += 1
 
         # Save results
-        savedict['%06d' % index] = {
+        result_item = {
             'response': response,
             'correctness': correctness,
             'hallucination': hallucination,
@@ -286,6 +290,14 @@ def evaluate(output_path, local_rank=0, world_size=1):
             'predictions': predictions,
             'references': references
         }
+        
+        # Add fileindex and qa_id if available
+        if fileindex is not None:
+            result_item['fileindex'] = fileindex
+        if qa_id is not None:
+            result_item['qa_id'] = qa_id
+        
+        savedict['%06d' % index] = result_item
         # Save to workers directory
         json.dump(savedict, open(save_path, 'w'), indent=2)
         index += 1
@@ -344,14 +356,23 @@ if __name__ == "__main__":
                 hallucination.append(item['hallucination'])
 
                 # Collect detailed information for analysis
-                evaluation_details.append({
+                detail_item = {
                     'sample_id': key,
                     'question': item.get('question', ''),
                     'predictions': item.get('predictions', []),
                     'references': item.get('references', []),
                     'correctness': item['correctness'],
-                    'hallucination': item['hallucination']
-                })
+                    'hallucination': item['hallucination'],
+                    'response': item.get('response', '')
+                }
+                
+                # Add fileindex and qa_id if available
+                if 'fileindex' in item:
+                    detail_item['fileindex'] = item['fileindex']
+                if 'qa_id' in item:
+                    detail_item['qa_id'] = item['qa_id']
+                
+                evaluation_details.append(detail_item)
 
     # Calculate totals and precision
     total_correctness = sum(correctness)
@@ -370,7 +391,7 @@ if __name__ == "__main__":
         # Calculate precision for this sample
         sample_precision = detail['correctness'] / (detail['correctness'] + detail['hallucination']) if (detail['correctness'] + detail['hallucination']) > 0 else 0
 
-        evaluation_results.append({
+        result_item = {
             'question': detail['question'],
             'answer': detail['references'],  # List format
             'prediction': detail['predictions'][0] if detail['predictions'] else '',  # Best prediction
@@ -378,10 +399,50 @@ if __name__ == "__main__":
             'corr': detail['correctness'],
             'halu': detail['hallucination'],
             'precise': round(sample_precision, 4)
-        })
+        }
+        
+        # Add fileindex and qa_id if available
+        if 'fileindex' in detail:
+            result_item['fileindex'] = detail['fileindex']
+        if 'qa_id' in detail:
+            result_item['qa_id'] = detail['qa_id']
+        
+        evaluation_results.append(result_item)
 
     # Calculate overall statistics
     overall_precision = total_correctness / (total_correctness + total_hallucination) if (total_correctness + total_hallucination) > 0 else 0
+
+    # Calculate statistics by QA category
+    qa_stats = {}
+    for detail in evaluation_details:
+        qa_id = detail.get('qa_id', 'Unknown')
+        if qa_id not in qa_stats:
+            qa_stats[qa_id] = {
+                'correctness': [],
+                'hallucination': [],
+                'count': 0
+            }
+        qa_stats[qa_id]['correctness'].append(detail['correctness'])
+        qa_stats[qa_id]['hallucination'].append(detail['hallucination'])
+        qa_stats[qa_id]['count'] += 1
+    
+    # Calculate per-QA statistics
+    qa_summary = {}
+    for qa_id, stats in qa_stats.items():
+        total_corr = sum(stats['correctness'])
+        total_halu = sum(stats['hallucination'])
+        avg_corr = total_corr / len(stats['correctness']) if stats['correctness'] else 0
+        avg_halu = total_halu / len(stats['hallucination']) if stats['hallucination'] else 0
+        precision = total_corr / (total_corr + total_halu) if (total_corr + total_halu) > 0 else 0
+        
+        qa_summary[qa_id] = {
+            'total_samples': stats['count'],
+            'total_corr': total_corr,
+            'total_halu': total_halu,
+            'avg_corr': round(avg_corr, 2),
+            'avg_halu': round(avg_halu, 2),
+            'precise': round(precision, 4)
+        }
 
     # Prepare final summary
     summary = {
@@ -393,6 +454,7 @@ if __name__ == "__main__":
             'avg_halu': round(avg_hallucination, 2),
             'precise': round(overall_precision, 4)
         },
+        'qa_stats': qa_summary,  # Add per-QA statistics
         'results': evaluation_results
     }
 
@@ -416,12 +478,31 @@ if __name__ == "__main__":
     print("="*60)
     print(f"Total samples: {len(evaluation_results)}")
 
-    print(f"\nEvaluation Results:")
+    print(f"\nOverall Evaluation Results:")
     print(f"  - Total Corr: {summary['stats']['total_corr']}")
     print(f"  - Total Halu: {summary['stats']['total_halu']}")
     print(f"  - Avg Corr: {summary['stats']['avg_corr']}")
     print(f"  - Avg Halu: {summary['stats']['avg_halu']}")
     print(f"  - Precision: {summary['stats']['precise']}")
+
+    # Print per-QA statistics
+    if qa_summary:
+        print(f"\nPer-QA Category Statistics:")
+        print("="*60)
+        # Sort QA IDs for consistent output
+        sorted_qa_ids = sorted([qa_id for qa_id in qa_summary.keys() if qa_id != 'Unknown'])
+        if 'Unknown' in qa_summary:
+            sorted_qa_ids.append('Unknown')
+        
+        for qa_id in sorted_qa_ids:
+            stats = qa_summary[qa_id]
+            print(f"\n{qa_id}:")
+            print(f"  - Total Samples: {stats['total_samples']}")
+            print(f"  - Total Corr: {stats['total_corr']}")
+            print(f"  - Total Halu: {stats['total_halu']}")
+            print(f"  - Avg Corr: {stats['avg_corr']}")
+            print(f"  - Avg Halu: {stats['avg_halu']}")
+            print(f"  - Precision: {stats['precise']}")
 
     print(f"\nEvaluation completed successfully!")
     print(f"Detailed results saved to: {detailed_results_file}")
