@@ -22,9 +22,16 @@ prompt = (
     "- Uncertain language (e.g., 'probably', 'seems like') reduces hallucination points"
     "- Focus on the core action, not minor details"
 
-    "Scoring:"
-    "- Correctness: 0-2 points (0=wrong, 1=partially correct, 2=fully correct)"
-    "- Hallucination: 0-2 points (0=no hallucination, 2=major hallucination)"
+    "Scoring (IMPORTANT - read carefully):"
+    "- Correctness: 0-2 points"
+    "  * 0 = wrong/incorrect answer"
+    "  * 1 = partially correct answer"
+    "  * 2 = fully correct answer"
+    "- Hallucination: 0-2 points (LOWER is BETTER)"
+    "  * 0 = NO hallucination (prediction is accurate, no false information)"
+    "  * 1 = minor hallucination (some incorrect details)"
+    "  * 2 = major hallucination (significant false information)"
+    "  NOTE: If there is NO hallucination, you MUST give 0, NOT 2!"
 
     "Respond in exactly this format:"
     "- Correctness: [0-2] # [brief justification]"
@@ -171,16 +178,34 @@ def evaluate_single_qa(prediction: str, references: List[str], question: str, cl
                 timeout=30.0  # Add timeout to prevent hanging
             )
             full_response = response_obj.choices[0].message.content
-            match_correctness = re.search(r'Correctness: (\d+) #', full_response)
-            match_hallucination = re.search(r'Hallucination: (\d+) #', full_response)
+            
+            # Try to match with dash prefix first (expected format: "- Correctness: X # ...")
+            match_correctness = re.search(r'-?\s*Correctness:\s*(\d+)\s*#', full_response, re.IGNORECASE)
+            match_hallucination = re.search(r'-?\s*Hallucination:\s*(\d+)\s*#', full_response, re.IGNORECASE)
+            
+            # If not found, try without dash (for backward compatibility)
+            if not match_correctness:
+                match_correctness = re.search(r'Correctness:\s*(\d+)', full_response, re.IGNORECASE)
+            if not match_hallucination:
+                match_hallucination = re.search(r'Hallucination:\s*(\d+)', full_response, re.IGNORECASE)
+            
             if match_correctness and match_hallucination:
                 correctness = int(match_correctness.group(1))
                 hallucination = int(match_hallucination.group(1))
+                
+                # Validate scores are in valid range [0-2]
+                if correctness < 0 or correctness > 2:
+                    raise ValueError(f"Invalid correctness score: {correctness}")
+                if hallucination < 0 or hallucination > 2:
+                    raise ValueError(f"Invalid hallucination score: {hallucination}")
+                
                 # Extract only the explanation part
                 explanation = extract_explanation(full_response)
                 return correctness, hallucination, explanation
             else:
                 # If response format is incorrect, treat as a failure and retry
+                # Log the response for debugging
+                print(f"Warning: Failed to parse response format. Response: {full_response[:200]}")
                 raise ValueError("Response format validation failed")
 
         except (httpx.RequestError, openai.APITimeoutError, ValueError) as e:
