@@ -18,6 +18,6 @@ deepspeed --include localhost:0,1 --master_port 1234 \
     --model_checkpoint ${MODEL_CHECKPOINT} \
     --config ${CONFIG} \
     --data_root ${DATA_ROOT} \
-    --batch_size 4 \
+    --batch_size 12 \
     --test_split "dataset/HumanML3D/_split/test_QAs.json" \
     --use_random_question_for_caption true

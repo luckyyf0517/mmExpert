@@ -284,6 +284,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
                 question = item['question']
                 answer = item['answer']
                 filename = item['filename']
+                fileindex = item.get('fileindex', None)  # Get fileindex if available
+                qa_id = item.get('qa_id', None)  # Get qa_id if available (for QA data)
 
                 # Format as conversation (format_conversation handles inference mode by not adding answer to conversation)
                 conversation = self.format_conversation(question, answer)
@@ -315,7 +317,7 @@ class WaveLLMDataModule(pl.LightningDataModule):
                 input_ids = processed_data["input_ids"][0]
                 labels = processed_data["labels"][0]
 
-                return {
+                result = {
                     'input_ids': input_ids,
                     'labels': labels,
                     'wave_embed': item['wave_embed'],  # Keep the original wave embedding
@@ -323,6 +325,16 @@ class WaveLLMDataModule(pl.LightningDataModule):
                     'answer': answer,
                     'filename': filename
                 }
+                
+                # Add fileindex if available
+                if fileindex is not None:
+                    result['fileindex'] = fileindex
+                
+                # Add qa_id if available (for QA data)
+                if qa_id is not None:
+                    result['qa_id'] = qa_id
+                
+                return result
         
         # Return wrapper dataset (lazy loading)
         return ConversationDatasetWrapper(
@@ -402,6 +414,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
         questions = [item.get('question', '') for item in batch]
         answers = [item.get('answer', '') for item in batch]
         filenames = [item.get('filename', '') for item in batch]
+        fileindexes = [item.get('fileindex', None) for item in batch]  # Extract fileindex if available
+        qa_ids = [item.get('qa_id', None) for item in batch]  # Extract qa_id if available (for QA data)
 
         # Process wave features - pad and stack all views
         # Both embed_wave_features=True and False need padding for batching
@@ -451,6 +465,8 @@ class WaveLLMDataModule(pl.LightningDataModule):
         result['questions'] = questions
         result['answers'] = answers
         result['filenames'] = filenames
+        result['fileindexes'] = fileindexes  # Add fileindex if available
+        result['qa_ids'] = qa_ids  # Add qa_id if available (for QA data)
 
         return result
 

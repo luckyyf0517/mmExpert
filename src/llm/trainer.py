@@ -380,6 +380,8 @@ class WaveLLMTrainer(pl.LightningModule):
         # Get questions and answers from batch (if available)
         questions = batch.get('questions', [])
         answers = batch.get('answers', [])
+        fileindexes = batch.get('fileindexes', [])  # Get fileindexes if available
+        qa_ids = batch.get('qa_ids', [])  # Get qa_ids if available (for QA data)
         
         # Get batch size
         batch_size = batch['input_ids'].shape[0]
@@ -390,19 +392,32 @@ class WaveLLMTrainer(pl.LightningModule):
         
         # Process each sample in batch
         for i in range(batch_size):
-            # Use batch_idx and sample index within batch as unique identifier
-            sample_idx = batch_idx * batch_size + i
-            
             # Get question and answer from batch (if available)
             question = questions[i] if i < len(questions) else ''
             answer = answers[i] if i < len(answers) else ''
+            fileindex = fileindexes[i] if i < len(fileindexes) and fileindexes[i] is not None else None
+            qa_id = qa_ids[i] if i < len(qa_ids) and qa_ids[i] is not None else None
             
-            # Add result
-            results[f"sample_{sample_idx}"] = {
+            # Calculate sample index for unique identification
+            sample_idx = batch_idx * batch_size + i
+            
+            # Create result item
+            result_item = {
                 "question": question,
                 "answer": answer,
                 "prediction": preds[i] if i < len(preds) else ""
             }
+            
+            # Add fileindex if available
+            if fileindex is not None:
+                result_item["fileindex"] = fileindex
+            
+            # Add qa_id if available (for QA data)
+            if qa_id is not None:
+                result_item["qa_id"] = qa_id
+            
+            # Use sample_idx as key for all items
+            results[f"sample_{sample_idx}"] = result_item
         
         # Write updated results
         with open(self.output_file, 'w', encoding='utf-8') as f:

@@ -196,21 +196,57 @@ class WaveCaptionDataset(Dataset):
             return [{'question': None, 'answer': '#'.join(data_item['captions'])}]
         
     def _generate_question_qas(self, data_item):
-        """Generate question-based QA pairs."""
-        questions = list(data_item['questions'].values()) if 'questions' in data_item else []
-        return questions
+        """Generate question-based QA pairs with QA IDs.
+        
+        Args:
+            data_item: Dictionary containing 'questions' field, where 'questions' is a dict
+                with keys like 'QA01', 'QA02', etc., and values are dicts with 'question' and 'answer' fields.
+                Example structure:
+                {
+                    'questions': {
+                        'QA01': {'question': '...', 'answer': '...', 'full marks': 2},
+                        'QA02': {'question': '...', 'answer': '...', 'full marks': 3}
+                    }
+                }
+        
+        Returns:
+            List of dicts, each containing 'qa_id', 'question', and 'answer'
+        """
+        if 'questions' not in data_item:
+            return []
+        
+        # Return list of dicts with qa_id, question, and answer
+        qa_list = []
+        for qa_id, qa_data in data_item['questions'].items():
+            qa_dict = {
+                'qa_id': qa_id,  # e.g., 'QA01', 'QA02', etc.
+                'question': qa_data.get('question', ''),
+                'answer': qa_data.get('answer', '')
+            }
+            qa_list.append(qa_dict)
+        return qa_list
     
     def _create_data_item(self, data_item, qa):
         """Create data items using NPZ file format (new data organization)."""
         # New data format uses single NPZ file per sample (no rotation postfixes)
         radar_path = self._get_radar_path(data_item)
         
-        return {
+        result = {
             'filename': radar_path,
             'question': qa.get('question') if qa else None,
             'answer': qa.get('answer') if qa else '',
             'caption': "\n".join(data_item['captions'])
         }
+        
+        # Add fileindex if available
+        if 'fileindex' in data_item:
+            result['fileindex'] = data_item['fileindex']
+        
+        # Add qa_id if available (for QA data)
+        if qa and 'qa_id' in qa:
+            result['qa_id'] = qa['qa_id']
+        
+        return result
 
     def __len__(self):
         """Return number of utterances."""
@@ -259,13 +295,23 @@ class WaveCaptionDataset(Dataset):
         }
 
         # Return raw data only - preprocessing done by datamodule.py
-        return {
+        result = {
             'filename': instance['filename'],
             'question': instance['question'],
             'answer': instance['answer'],
             'caption': instance['caption'],
             'wave_embed': wave_embed
         }
+        
+        # Add fileindex if available
+        if 'fileindex' in instance:
+            result['fileindex'] = instance['fileindex']
+        
+        # Add qa_id if available (for QA data)
+        if 'qa_id' in instance:
+            result['qa_id'] = instance['qa_id']
+        
+        return result
     
 
 # NOTE: mini_dataset() function has been removed as it was unused and called deleted preprocess().
