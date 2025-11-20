@@ -20,6 +20,6 @@ params:
       radar_views: 'all'          # Radar views to use: 'all', 'doppler', 'range', 'azimuth'
       mmwave_postfix: ''          # MMWave folder postfix (suffix after 'mmwave')
 
-    batch_size: 64                # Batch size for training
+    batch_size: 128               # Batch size for training
     num_workers: 1                # Number of data loading workers
     sample_ratio: 1

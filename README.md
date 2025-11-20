@@ -139,54 +139,77 @@ Prepare your mmWave radar data in the following format:
 }
 ```
 
-### 2. Training
+### 2. Training Pipeline
+
+The training process consists of three stages:
 
 #### Stage 1: CLIP Pre-training
-```bash
-# Train CLIP with default configuration (CLIP + HumanML3D)
-python run_clip.py \
-  --data-config config/data/humanml3d.yaml \
-  --model-config config/model/clip.yaml \
-  --version clip_humanml3d_experiment
 
-# Train SigLIP with adaptive patch sizing
-python run_clip.py \
-  --data-config config/data/humanml3d.yaml \
-  --model-config config/model/siglip.yaml \
-  --version siglip_humanml3d_experiment
+Train the CLIP model to align mmWave radar signals with text descriptions:
+
+```bash
+# Train CLIP with distributed training (2 GPUs)
+torchrun --nproc_per_node=2 train_clip.py \
+    --model-config config/model/clip.yaml \
+    --data-config config/data/humanml3d.yaml
 ```
 
-#### Stage 2: LLM Fine-tuning
-```bash
-# Fine-tune the multimodal model with LoRA
-bash scripts/train_r4a8.sh feature/clip_humanml3d_experiment/
+**Output**: The model checkpoints will be saved to `log/humanml3d_experiments/YYYYMMDD_HHMMSS_clip/checkpoints/`
 
-# Different LoRA configurations available:
-# scripts/train_r8a16.sh    # rank=8, alpha=16
-# scripts/train_r16a32.sh   # rank=16, alpha=32
+**Note**: Replace `YYYYMMDD_HHMMSS` with the actual timestamp generated during training.
+
+#### Stage 2: Extract Pre-trained Radar Encoder
+
+Extract the trained radar encoder weights for LLM fine-tuning:
+
+```bash
+python tools/extrack_model_weight.py \
+    --checkpoint log/humanml3d_experiments/YYYYMMDD_HHMMSS_clip/checkpoints/last.ckpt
 ```
 
-### 3. Inference
+**Output**: The radar encoder will be saved to `feature/YYYYMMDD_HHMMSS_clip/` containing:
+- `radar_encoder.pth`: Pre-trained radar encoder weights
+- `radar_encoder_config.yaml`: Encoder configuration file
 
-```python
-from src.wavellm import WaveLLMForCausalLM
-import torch
+#### Stage 3: LLM Fine-tuning
 
-# Load the trained model
-model = WaveLLMForCausalLM.from_pretrained("path/to/trained/model")
-model.get_model().load_wave_encoder("path/to/encoder")
+Fine-tune the LLM (Phi-3) with the extracted radar encoder features:
 
-# Prepare input
-mmwave_signal = torch.randn(1, 1, 496, 128)  # Example mmWave radar signal
-question = "Describe the human motion shown in this mmWave signal."
+```bash
+deepspeed --include localhost:0 --master_port 1234 \
+    train_llm.py \
+    --config config/llm/phi3.yaml \
+    --data_root feature/YYYYMMDD_HHMMSS_clip \
+    --batch_size 12 \
+    --num_workers 4 \
+    --max_epochs 3 \
+    --gradient_accumulation_steps 1 \
+    --zero_stage 1 \
+    --dtype bf16 \
+    --train_split "dataset/HumanML3D/_split/train_QAs.json" \
+    --test_split "dataset/HumanML3D/_split/test_QAs.json" \
+    --use_random_question_for_caption true
+```
 
-# Generate response
-with torch.no_grad():
-    response = model.generate(
-        input_wave_embeds=mmwave_signal,
-        input_ids=tokenizer.encode(question, return_tensors="pt"),
-        max_length=512
-    )
+**Output**: The fine-tuned model will be saved to `output/YYYYMMDD_HHMMSS_phi3/` containing:
+- `adapter_model.safetensors`: LoRA adapter weights
+- `adapter_config.json`: LoRA configuration
+- `non_lora_trainables.safetensors`: Non-LoRA trainable weights
+- `training_config.json`: Training configuration
+
+### 3. Evaluation
+
+Evaluate the fine-tuned LLM model:
+
+```bash
+deepspeed --include localhost:0,1 --master_port 1234 \
+    evaluate_llm.py \
+    --model_checkpoint output/YYYYMMDD_HHMMSS_phi3 \
+    --config config/llm/phi3.yaml \
+    --data_root feature/YYYYMMDD_HHMMSS_clip \
+    --batch_size 12 \
+    --test_split "dataset/HumanML3D/_split/test_QAs.json" \
+    --use_random_question_for_caption true
 ```
 
 ## 📊 Dataset Support
@@ -203,97 +226,6 @@ with torch.no_grad():
 The system supports mmWave radar data represented as wave signals with dimensions `[batch_size, channels, height, width]` where:
 - `height`: Temporal dimension (e.g., 496 frames)
 - `width`: Feature dimension (e.g., 128 features representing radar signal characteristics)
-
-## 🔧 Configuration
-
-### Data Configuration (`config/data/humanml3d.yaml`)
-```yaml
-target: src.data_interface.HumanDInterface
-params:
-  cfg:
-    # Dataset splits
-    train_split: ['dataset/HumanML3D/_split/train.json']
-    val_split: ['dataset/HumanML3D/_split/val.json']
-
-    opt:
-      max_motion_length: 496      # Full padded length
-      min_motion_len: 96          # Minimum motion length
-      max_text_len: 20            # Maximum text caption length
-      unit_length: 16             # Unit length for processing
-      normalize: 'per_frame'      # Normalization strategy
-      radar_views: 'all'          # Radar views: 'all', 'doppler', etc.
-
-    batch_size: 64                # Batch size for training
-    num_workers: 1                # Number of data loading workers
-```
-
-### Model Configuration
-
-#### CLIP Configuration (`config/model/clip.yaml`)
-```yaml
-target: src.model.clip.CLIP
-params:
-  max_epochs: 50
-  learning_rate: 5.0e-05
-  temperature: 0.07
-
-  encoder_configs:
-    radar:
-      embed_dim: 256
-      dropout: 0.1
-    text:
-      model_name: 'sentence-transformers/paraphrase-MiniLM-L6-v2'
-      embed_dim: 256
-      max_length: 77
-      freeze_backbone: true
-```
-
-#### SigLIP Configuration (`config/model/siglip.yaml`)
-```yaml
-target: src.model.clip.CLIP
-params:
-  max_epochs: 200
-  learning_rate: 1.0e-04
-  use_siglip: true
-
-  encoder_cfg:
-    model_name: 'vit_base_patch16_clip_224.openai'
-    embed_dim: 256
-    adaptive_patch_size: true
-    radar_views: 'all'
-
-    # Radar signal resolutions
-    range_resolution: [256, 496]
-    doppler_resolution: [128, 496]
-    azimuth_resolution: [128, 496]
-
-  transformer_width: 256
-  transformer_heads: 8
-  transformer_layers: 1
-```
-
-### LoRA Training Configuration
-```yaml
-# LoRA configuration (used in scripts)
-lora_r: 4                     # LoRA rank
-lora_alpha: 8                 # LoRA scaling factor
-lora_dropout: 0.05            # Dropout rate
-lora_bias: "none"             # Bias type
-```
-
-### Experiment Configurations
-
-#### Text Encoder Freezing Strategies
-- **Complete Freezing**: Freeze entire text encoder
-- **Partial Freezing**: Freeze backbone layers only
-- **Projection Only**: Train only projection layers
-- **Layer-wise**: Unfreeze specific last layers
-
-#### Text Encoder Architectures
-- **BERT**: bert-base-uncased, bert-large-uncased
-- **RoBERTa**: roberta-base
-- **MiniLM**: paraphrase-MiniLM-L6-v2, paraphrase-MiniLM-L12-v2
-- **MPNet**: sentence-transformers/all-mpnet-base-v2
 
 ## 📈 Evaluation
 
@@ -323,14 +255,21 @@ Here are some example outputs from the mmExpert-LLM model:
 ### Running Evaluation
 
 ```bash
-# Run comprehensive language evaluation
-python evaluation/LanguageEvaluator.py --model_path path/to/model --data_path path/to/test_data
+# Evaluate fine-tuned LLM model using DeepSpeed
+deepspeed --include localhost:0,1 --master_port 1234 \
+    evaluate_llm.py \
+    --model_checkpoint output/YYYYMMDD_HHMMSS_phi3 \
+    --config config/llm/phi3.yaml \
+    --data_root feature/YYYYMMDD_HHMMSS_clip \
+    --batch_size 12 \
+    --test_split "dataset/HumanML3D/_split/test_QAs.json" \
+    --use_random_question_for_caption true
 
-# Run evaluation using the provided evaluation script
-bash scripts/eval.sh feature/clip_humanml3d_experiment/
+# Run comprehensive language evaluation (if available)
+python tmp/evaluation/LanguageEvaluator.py --model_path path/to/model --data_path path/to/test_data
 
 # GPT-based evaluation (for qualitative assessment)
-python evaluation/GPTEvaluator.py --model_path path/to/model --data_path path/to/test_data
+python tmp/evaluation/GPTEvaluator.py --model_path path/to/model --data_path path/to/test_data
 ```
 
 ## 🛠️ Advanced Usage
@@ -339,44 +278,43 @@ python evaluation/GPTEvaluator.py --model_path path/to/model --data_path path/to
 
 ```python
 # Custom dataset integration
-from src.datasets.wavellm_dataset import WaveCaptionDataset
+from src.llm.dataset import WaveLLMDataset
 
 # Create custom dataset
-dataset = WaveCaptionDataset(
+dataset = WaveLLMDataset(
     data_root="path/to/your/data",
     split="train",
     tokenizer=tokenizer
 )
 
-# Custom training loop
-from src.trainer.train_llm import train
-
-# Configure training arguments
-training_args = TrainingArguments(
-    output_dir="./output",
-    per_device_train_batch_size=4,
-    learning_rate=5e-4,
-    num_train_epochs=3,
-    lora=True,
-    lora_r=8,
-    lora_alpha=16
-)
+# Custom training using train_llm.py with command-line arguments
+# All training parameters can be overridden via command line
 ```
 
 ### Model Customization
 
 ```python
-# Custom wave encoder
-from src.model.clip import ImageEncoder
+# Custom radar encoder
+from src.clip.encoders.radar_encoder_vit import RadarEncoderViT
 
-custom_encoder = ImageEncoder(
-    model_name='vit_base_patch16_224',
-    embed_dim=512,
-    image_resolution=[496, 128]
+custom_encoder = RadarEncoderViT(
+    vit_model='vit_small_patch16_224.augreg_in21k',
+    embed_dim=768,
+    patch_size_range=[32, 16],
+    patch_size_other=[16, 16],
+    max_sequence_length=248
 )
 
-# Custom projection layers
-projection_layers = nn.Linear(512, model.config.hidden_size)
+# Custom text encoder
+from src.clip.encoders.text_encoder import TextEncoder
+
+custom_text_encoder = TextEncoder(
+    model_name='sentence-transformers/all-mpnet-base-v2',
+    embed_dim=768,
+    max_length=77,
+    freeze_backbone=False,
+    unfreeze_last_layers=1
+)
 ```
 
 ## 🛠️ Development Tools
@@ -398,8 +336,11 @@ python tools/preview_freezing_strategies.py --experiment-dir config/model/experi
 
 ### Configuration Validation
 ```bash
-# Test configuration files for validity
-python -c "from src.misc.tools import instantiate_from_config; from src.misc.io import load_config; cfg = load_config(None, 'config/data/humanml3d.yaml', 'config/model/clip.yaml'); print('Configuration is valid!')"
+# Test configuration files for validity (dry run mode)
+python train_clip.py \
+    --model-config config/model/clip.yaml \
+    --data-config config/data/humanml3d.yaml \
+    --dry-run
 ```
 
 ## 📁 Project Structure
@@ -407,72 +348,89 @@ python -c "from src.misc.tools import instantiate_from_config; from src.misc.io 
 ```
 mmExpert/
 ├── README.md                   # Project documentation
-├── run_clip.py                 # CLIP pre-training main entry point
-├── evaluate_clip.py           # CLIP evaluation script
+├── train_clip.py              # CLIP pre-training main entry point
+├── train_llm.py              # LLM fine-tuning main entry point
+├── evaluate_llm.py           # LLM evaluation script
+├── evaluate_clip.py          # CLIP evaluation script
 ├── src/                       # Source code directory
-│   ├── core/                  # Core abstractions and base classes
-│   │   ├── base.py            # Base classes for encoders, models, data
-│   │   ├── registry.py        # Component registry
-│   │   ├── factory.py         # Factory for instantiation
-│   │   ├── injection.py       # Dependency injection
-│   │   └── pipeline.py        # Pipeline implementation
-│   ├── wavellm/               # WaveLLM (LLM component)
-│   │   ├── modeling_wavellm.py # Main WaveLLM model architecture
-│   │   ├── conversation.py    # Conversation templates
-│   │   └── __init__.py
-│   ├── model/                  # Model implementations
-│   │   ├── clip_model.py      # Main CLIP model implementation
-│   │   ├── clip.py            # CLIP interface and legacy components
-│   │   ├── clip_loss.py       # CLIP/SigLIP loss functions
-│   │   ├── clip_transformer.py # Transformer components
-│   │   └── sequence_similarity.py # Sequence similarity computation
-│   ├── encoders/              # Encoders for different modalities
-│   │   ├── radar_encoder.py   # Radar signal encoder
-│   │   └── text_encoder.py    # Text encoder
-│   ├── datasets/              # Dataset implementations
-│   │   ├── wavellm_dataset.py  # Main WaveLLM dataset
-│   │   └── base_dataset.py     # Base dataset utilities
-│   ├── trainer/               # Training components
-│   │   ├── wavellm_trainer.py # WaveLLM trainer
-│   │   ├── train_llm.py      # LLM fine-tuning script
-│   │   └── eval_llm.py        # LLM evaluation script
-│   └── misc/                  # Utilities and tools
-│       ├── tools.py           # General utilities
-│       ├── io.py              # I/O utilities
-│       ├── config_printer.py  # Configuration printing
-│       └── llm_utils.py       # LLM utilities
+│   ├── clip/                  # CLIP component
+│   │   ├── clip/             # CLIP model implementations
+│   │   │   ├── clip_model.py # Main CLIP model (LightningModule)
+│   │   │   ├── clip_loss.py  # CLIP/SigLIP loss functions
+│   │   │   ├── clip_transformer.py # Transformer components
+│   │   │   └── sequence_similarity.py # Sequence similarity computation
+│   │   ├── core/             # Core abstractions and base classes
+│   │   │   ├── base.py       # Base classes for encoders, models, data
+│   │   │   ├── registry.py   # Component registry
+│   │   │   ├── factory.py   # Factory for instantiation
+│   │   │   ├── injection.py # Dependency injection
+│   │   │   └── pipeline.py  # Pipeline implementation
+│   │   ├── encoders/         # Encoders for different modalities
+│   │   │   ├── radar_encoder_vit.py # ViT-based radar encoder
+│   │   │   ├── radar_encoder_temporal.py # Temporal radar encoder
+│   │   │   └── text_encoder.py # Text encoder
+│   │   ├── datamodule.py     # PyTorch Lightning data module
+│   │   ├── dataset.py        # Dataset implementations
+│   │   └── utils/            # Utility functions
+│   │       ├── io.py         # I/O utilities
+│   │       ├── tools.py      # General utilities
+│   │       └── config_printer.py # Configuration printing
+│   ├── llm/                  # LLM component
+│   │   ├── llm/             # LLM model implementations
+│   │   │   ├── modeling_causal.py # Main causal LLM model
+│   │   │   ├── model_factory.py # Model factory
+│   │   │   └── utils.py      # LLM utilities
+│   │   ├── datamodule.py    # PyTorch Lightning data module
+│   │   ├── dataset.py       # Dataset implementations
+│   │   ├── trainer.py       # PyTorch Lightning trainer
+│   │   └── utils/           # Utility functions
+│   │       ├── config_loader.py # Configuration loader
+│   │       ├── common_utils.py # Common utilities
+│   │       ├── deepspeed_utils.py # DeepSpeed utilities
+│   │       ├── conversation.py # Conversation templates
+│   │       ├── trainer_lora_utils.py # LoRA utilities
+│   │       └── trainer_debug_utils.py # Debug utilities
+│   └── logger.py            # Logging utilities
 ├── config/                    # Configuration files
-│   ├── data/                  # Data configurations
-│   │   └── humanml3d.yaml     # HumanML3D dataset configuration
-│   └── model/                 # Model configurations
-│       ├── clip.yaml          # CLIP model configuration
-│       ├── siglip.yaml       # SigLIP model configuration
-│       ├── experiments-freeze-layers/  # Text encoder freezing experiments
-│       └── experiments-text-encoder/   # Text encoder experiments
+│   ├── data/                 # Data configurations
+│   │   └── humanml3d.yaml    # HumanML3D dataset configuration
+│   ├── model/                # Model configurations
+│   │   ├── clip.yaml         # CLIP model configuration
+│   │   ├── siglip.yaml       # SigLIP model configuration
+│   │   └── experiments-clip.yaml # CLIP experiment configurations
+│   └── llm/                  # LLM configurations
+│       ├── phi3.yaml         # Phi-3 model configuration
+│       ├── phi4.yaml         # Phi-4 model configuration
+│       └── qwen3.yaml        # Qwen3 model configuration
 ├── dataset/                   # Dataset storage
-│   └── HumanML3D/             # HumanML3D dataset structure
-├── evaluation/                # Evaluation components
-│   ├── LanguageEvaluator.py   # Language evaluation metrics
-│   ├── GPTEvaluator.py        # GPT-based evaluation
-│   └── eval_example/          # Evaluation examples
-├── scripts/                   # Training and evaluation scripts
-│   ├── train_r4a8.sh         # LoRA training script (r=4, alpha=8)
-│   ├── train_r8a16.sh        # LoRA training script (r=8, alpha=16)
-│   ├── train_r16a32.sh       # LoRA training script (r=16, alpha=32)
-│   └── eval.sh               # Evaluation script
+│   ├── HumanML3D/           # HumanML3D dataset structure
+│   │   ├── _split/          # Dataset splits
+│   │   │   ├── train.json   # Training split
+│   │   │   ├── test.json    # Test split
+│   │   │   ├── train_QAs.json # Training Q&A pairs
+│   │   │   └── test_QAs.json  # Test Q&A pairs
+│   │   └── mmwave.zip       # mmWave radar data
+│   └── HumanML3DExt/         # Extended HumanML3D dataset
 ├── tools/                     # Development and analysis tools
-│   ├── view_data.py          # Data visualization tool
-│   ├── inspect_text_encoder.py # Text encoder inspection
-│   ├── preview_freezing_strategies.py # Strategy preview
-│   └── extrack_model_weight.py # Model weight extraction
+│   ├── view_data.py         # Data visualization tool
+│   └── extrack_model_weight.py # Extract radar encoder weights
 ├── huggingface/               # Cached HuggingFace models (offline mode)
 ├── log/                       # Training logs and checkpoints
-├── results/                   # Evaluation results
+│   └── humanml3d_experiments/ # CLIP training outputs
+│       └── YYYYMMDD_HHMMSS_clip/ # Timestamped experiment folders
+│           ├── checkpoints/  # Model checkpoints
+│           └── config/      # Saved configuration files
+├── output/                    # LLM training outputs
+│   └── YYYYMMDD_HHMMSS_phi3/ # Timestamped model folders
+│       ├── adapter_model.safetensors # LoRA adapter weights
+│       ├── adapter_config.json # LoRA configuration
+│       └── training_config.json # Training configuration
 ├── feature/                   # Feature outputs and embeddings
+│   └── YYYYMMDD_HHMMSS_clip/ # Extracted radar encoder
+│       ├── radar_encoder.pth # Encoder weights
+│       └── radar_encoder_config.yaml # Encoder configuration
 ├── swanlog/                   # SwanLab experiment logs
-├── benchmark/                 # Benchmarking tools and results
-├── doc/                       # Additional documentation
-└── tmp/                       # Temporary files and cache
+└── doc/                       # Additional documentation
 ```
 
 ## 🔍 Key Features
