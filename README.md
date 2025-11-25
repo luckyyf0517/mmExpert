@@ -1,4 +1,4 @@
-# mmExpert
+# mmExpert: Integrating Large Language Models for Comprehensive mmWave Data Synthesis and Understanding
 
 <div align="center">
 
