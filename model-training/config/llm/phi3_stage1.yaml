@@ -1,0 +1,57 @@
+# WaveLLM Stage 1: caption supervision with a pretrained radar encoder.
+
+model_cfg:
+  model_type: phi3
+  use_peft: true
+
+  model:
+    model_path: "microsoft/Phi-3-mini-4k-instruct"
+    model_max_length: 2048
+
+  peft_config:
+    r: 8
+    lora_alpha: 16
+    lora_dropout: 0.05
+    bias: "none"
+    auto_find_target_modules: true
+    multimodal_keywords: ["mm_projection"]
+
+  conversation_template: "conv_phi3"
+  mm_use_wave_start_end: true
+  wave_token_len: 60
+  wave_patch_token: "<wave_patch>"
+  wave_start_token: "<wave_bos>"
+  wave_end_token: "<wave_eos>"
+
+  encoder_path: "features/radar_encoder"
+  encoder_config:
+    embed_dim: 768
+    max_sequence_length: 60
+
+data_cfg:
+  model_path: "microsoft/Phi-3-mini-4k-instruct"
+  model_max_length: 2048
+  batch_size: 64
+  num_workers: 4
+
+  train_split: "data/humanml3d/train.json"
+  val_split: "data/humanml3d/test.json"
+  data_root: "features/radar_encoder"
+
+  conversation_template: "conv_phi3"
+  mm_use_wave_start_end: true
+  wave_token_len: 60
+
+  supervision_mode: "caption"
+  caption_loading_mode_train: "expand"
+  caption_loading_mode_val: "sample"
+  use_random_question_for_caption: true
+
+training:
+  learning_rate: 5e-4
+  weight_decay: 0.0
+  warmup_steps: 100
+  max_epochs: 3
+  gradient_accumulation_steps: 1
+
+log_dir: "outputs/wavellm_stage1"

@@ -1,0 +1,34 @@
+{
+  "version": "round_0",
+  "model": "gpt-4o-mini",
+  "tasks": "Generate diverse human motions for daily activities.",
+  "total_count": 100,
+  "planner_model": "gpt-4o",
+  "worker_model": "gpt-4o-mini",
+  "batch_size": 10,
+  "prompt_template": [
+    "Generate diverse, concise descriptions of human motion for the task scope: {tasks}.",
+    "Each description should be a single sentence focusing on body parts, actions, speed, direction, and repetition.",
+    "Avoid emotional words, scenic descriptions, and literary filler. Write like a motion-capture annotation.",
+    "Vary sentence structure. Do not repeat the same opening pattern.",
+    "Do not number the descriptions."
+  ],
+  "constraints": [],
+  "feedback_history": [],
+  "motion_generation": {
+    "backend": "hunyuan_motion",
+    "joints_subdir": "joints_hunyuan_motion",
+    "backend_config": {
+      "model_path": "backends/hymotion/ckpts/tencent/HY-Motion-1.0",
+      "disable_rewrite": true,
+      "disable_duration_est": true,
+      "duration_policy": "uniform_random",
+      "duration_min_frames": 180,
+      "duration_max_frames": 300,
+      "seed": 42
+    }
+  },
+  "output_mode": "udoppler",
+  "price_per_1000_input_tokens": 0.15,
+  "price_per_1000_output_tokens": 0.60
+}

@@ -1,0 +1,27 @@
+data_source: joints
+data_pattern: ${MMEXPERT_DATA_ROOT}/joints/*.npy
+output_dir: ${MMEXPERT_DATA_ROOT}/udoppler
+
+fps: 30
+interp_n: 100
+scale: 1.0
+
+simulation_method: points
+num_rotations: 1
+output_mode: udoppler
+
+start: 0
+end: -1
+skip_exist: false
+
+num_antenna: 1
+radar_config: configs.radar.iwr1843_udoppler
+
+camera_orientation: [0.0, 0.0, 0.0]
+camera_position: [-5.6, 0.0, 1.0]
+simulation_bounds:
+  x: [-5.0, 5.0]
+  y: [-5.0, 5.0]
+  z_max: 1.0
+
+verbose: false

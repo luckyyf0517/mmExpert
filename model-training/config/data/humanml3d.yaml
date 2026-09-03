@@ -1,0 +1,21 @@
+# Data configuration for HumanML3D radar data.
+target: src.clip.datamodule.HumanDInterface
+params:
+  cfg:
+    train_split: [data/humanml3d/train.json]
+    train_ratio: [1.0]
+    val_split: [data/humanml3d/test.json]
+    val_ratio: [1.0]
+
+    opt:
+      max_motion_length: 496
+      min_motion_len: 96
+      max_text_len: 20
+      unit_length: 16
+      normalize: per_frame
+      radar_views: doppler
+      mmwave_postfix: ''
+
+    batch_size: 128
+    num_workers: 1
+    sample_ratio: 1

@@ -1,0 +1,112 @@
+You are generating supervision data for WaveLLM Stage 2 QA training.
+
+You are given multiple captions describing the same motion sample. They are different descriptions of one underlying action, not different actions.
+
+Captions:
+{captions}
+
+Question wording guidance for this sample:
+{question_style_guidance}
+
+You must generate exactly 4 question-answer pairs, named QA01-QA04, in JSON.
+
+Your goal is not to be flashy. Your goal is to create high-quality supervision that is:
+1. Faithful to the captions.
+2. Useful for training.
+3. Specific enough to distinguish similar motions.
+4. Simple and stable in wording.
+5. Varied enough in phrasing that the dataset does not collapse into one repeated question template.
+
+
+GENERAL RULES
+
+1. Every question and answer must be fully supported by the captions. Do not invent details.
+2. Prefer concrete, discriminative questions over generic ones.
+3. Avoid redundant questions. The 4 QAs should cover different aspects of the motion.
+4. Use natural but stable wording. Small variation is fine, but do not force creativity.
+5. Keep answers concise, usually one short sentence.
+6. All answers must end with a period.
+7. Use only standard ASCII characters.
+8. Do not use parentheses, brackets, em dashes, or unusual punctuation in answers.
+9. Questions should be answerable from the captions alone.
+10. If a certain kind of information is not supported by the captions, fall back to a safer, more literal question.
+11. Follow the wording guidance for this sample so that phrasing varies across the dataset.
+12. Within this sample, the four questions must have clearly different wording and should not share the same generic opening pattern.
+
+
+QUESTION DESIGN TARGETS
+
+You must produce the following 4 QA roles:
+
+QA01: Activity Category
+- Ask about the type of activity or motion category.
+- The category should be open-ended, not restricted to a fixed label set.
+- Use the most natural action description supported by the captions.
+- Prefer coarse-to-mid level action names, such as walking, jogging, kicking, jumping, bending, turning, lifting, placing, waving, flapping, or similar open-ended action descriptions.
+- Do not force overly fine-grained labels if the captions do not support them.
+- Follow the assigned wording guidance instead of defaulting to one generic question stem.
+
+QA02: Temporal Structure
+- Ask about the temporal structure of the motion.
+- Prefer sequence, order, repetition, or multi-stage structure over a generic count-only question.
+- This question should capture how the motion unfolds over time when possible.
+- Follow the assigned wording guidance instead of defaulting to one generic temporal question stem.
+
+QA03: High-Level Intent
+- Ask about the high-level intent of the motion when it is supported by the captions.
+- If high-level intent is ambiguous, ask about the high-level motion goal instead.
+- Keep this question at a moderate semantic level. Do not invent hidden motivation or social intent.
+- Prefer immediate physical purpose or movement goal over abstract purpose, emotion, training benefit, or social meaning.
+- Good fallback examples:
+  - what the person is trying to do overall
+  - what the overall movement goal is
+- Follow the assigned wording guidance instead of defaulting to one generic goal question stem.
+
+QA04: Specific Motion Detail
+- Ask about the most informative concrete detail supported by the captions.
+- Prefer one of these if available:
+  - direction
+  - body part usage
+  - left or right side
+  - repetition
+  - turning or rotation
+  - posture change such as squat, bend, kneel, jump
+  - interaction pattern such as one arm vs both arms
+- This should be the question most useful for distinguishing this motion from similar ones.
+- Keep this detail at a moderate level. Avoid overly fine-grained micro-details.
+- Follow the assigned wording guidance while keeping the target detail precise.
+
+
+IMPORTANT QUALITY PREFERENCES
+
+1. Do not ask overly generic questions if a more specific one is possible.
+2. Do not generate social or psychological intention unless the captions clearly support it.
+3. Do not ask about details that are absent from the captions.
+4. QA02 should capture temporal structure whenever the captions support it.
+5. At least one question should capture a concrete detail that helps separate similar actions.
+6. If multiple captions differ slightly, choose the shared consistent information.
+7. Keep the QA difficulty moderate. Do not generate questions that depend on very fine-grained perception.
+8. Favor lexical diversity in the questions, but never at the cost of clarity or faithfulness.
+9. If a natural alternative wording exists, prefer not to reuse the most common generic template.
+
+
+ANSWER STYLE
+
+1. Answers should be direct and training-friendly.
+2. Avoid unnecessary hedging unless the captions are genuinely ambiguous.
+3. Do not copy the captions verbatim unless needed for accuracy.
+4. Keep wording stable and easy to learn from.
+
+
+FULL MARKS
+
+Use integer full marks.
+- QA01, QA02, QA03: use 2 or 3 depending on complexity and specificity.
+- QA04: usually use 2.
+
+
+OUTPUT FORMAT
+
+Return only valid JSON in exactly this structure:
+
+{{"QA01": {{"question": "...", "answer": "...", "full marks": 2}}, "QA02": {{"question": "...", "answer": "...", "full marks": 2}}, "QA03": {{"question": "...", "answer": "...", "full marks": 2}}, "QA04": {{"question": "...", "answer": "...", "full marks": 2}}}}

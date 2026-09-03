@@ -1,0 +1,30 @@
+target: src.clip.clip.clip_model.CLIPModel
+params:
+  max_epochs: 20
+  learning_rate: 5.0e-5
+  temperature: 0.08
+  use_siglip: false
+
+  encoder_configs:
+    radar:
+      encoder_type: 'radar_encoder_vit'
+      embed_dim: 768
+      dropout: 0.1
+      radar_views: 'doppler'
+      vit_model: 'vit_small_patch16_224.augreg_in21k'
+      pretrained: true
+      freeze_backbone: false
+      use_layer_norm: true
+      use_repeat_in_chans: true
+      pool_type: 'avg'
+      patch_size_range: [64, 32]
+      patch_size_other: [32, 32]
+      max_sequence_length: 60
+
+    text:
+      model_name: 'sentence-transformers/all-mpnet-base-v2'
+      embed_dim: 768
+      max_length: 77
+      pooling_strategy: 'pooler'
+      freeze_backbone: false
+      unfreeze_last_layers: 1
